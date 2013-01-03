@@ -236,7 +236,8 @@ public class DiskLRUCacher implements ImageDiskCacherInterface {
 		}
 	}
 
-	Bitmap getBitmapSynchronouslyFromDisk(String uri, int sampleSize) throws FileNotFoundException, FileFormatException {
+	@Override
+	public	Bitmap getBitmapSynchronouslyFromDisk(String uri, int sampleSize) throws FileNotFoundException, FileFormatException {
 		File file = null;
 		if (isPermanentStorageUri(uri)) {
 			try {

@@ -1,5 +1,6 @@
 package com.xtremelabs.imageutils;
 
+import java.io.FileNotFoundException;
 import java.net.URI;
 import java.net.URISyntaxException;
 
@@ -8,6 +9,7 @@ import android.graphics.Bitmap;
 import android.os.Build;
 
 import com.xtremelabs.imageutils.AsyncOperationsMaps.AsyncOperationState;
+import com.xtremelabs.imageutils.DiskLRUCacher.FileFormatException;
 
 /**
  * This class defensively handles requests from four locations: LifecycleReferenceManager, ImageMemoryCacherInterface, ImageDiskCacherInterface, ImageNetworkInterface and the AsyncOperationsMaps.
@@ -44,6 +46,31 @@ public class ImageCacher implements ImageDownloadObserver, ImageDiskObserver, As
 			mImageCacher = new ImageCacher(appContext);
 		}
 		return mImageCacher;
+	}
+	
+	public Bitmap getBitmapForWidget(String url, ImageCacherListener cacherListener, ScalingInfo scalingInfo) {
+	     int sampleSize = getSampleSize(url, scalingInfo);
+	     Bitmap bitmap;
+
+	     if (mDiskCache.isCached(url) && sampleSize != -1) {
+	          if ((bitmap = mMemoryCache.getBitmap(url, sampleSize)) != null) {
+	               return bitmap;
+	          } else {
+	               try {
+	                    return mDiskCache.getBitmapSynchronouslyFromDisk(url, sampleSize);
+	               } catch (FileNotFoundException e) {
+	                    // TODO Auto-generated catch block
+	                    e.printStackTrace();
+	               } catch (FileFormatException e) {
+	                   // TODO Auto-generated catch block
+	                   e.printStackTrace();
+	              }
+	          }
+	     } else {
+	          downloadImageFromNetwork(url, cacherListener, scalingInfo);
+	     }
+
+	     return null;
 	}
 
 	public Bitmap getBitmap(String uri, ImageCacherListener imageCacherListener, ScalingInfo scalingInfo) {
