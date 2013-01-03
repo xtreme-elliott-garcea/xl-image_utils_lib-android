@@ -133,8 +133,8 @@ public class DiskLRUCacher implements ImageDiskCacherInterface {
 			sampleSize = calculateSampleSize(scalingInfo.width, scalingInfo.height, dimensions);
 		}
 		
-
-		final DecodeOperationParameters decodeOperationParameters = new DecodeOperationParameters(uri, sampleSize);
+		final int finalSampleSize = sampleSize;
+		final DecodeOperationParameters decodeOperationParameters = new DecodeOperationParameters(uri, finalSampleSize);
 
 		Runnable runnable = new Runnable() {
 			@Override
@@ -143,7 +143,7 @@ public class DiskLRUCacher implements ImageDiskCacherInterface {
 				String errorMessage = null;
 				Bitmap bitmap = null;
 				try {
-					bitmap = getLocalBitmapSynchronouslyFromDisk(uri, sampleSize);
+					bitmap = getLocalBitmapSynchronouslyFromDisk(uri, finalSampleSize);
 				} catch (FileNotFoundException e) {
 					failed = true;
 					errorMessage = "Disk decode failed with error message: " + e.getMessage();
@@ -154,9 +154,9 @@ public class DiskLRUCacher implements ImageDiskCacherInterface {
 				removeRequestFromMap(decodeOperationParameters);
 
 				if (!failed) {
-					mImageDecodeObserver.onImageDecoded(bitmap, uri, sampleSize, ImageReturnedFrom.DISK);
+					mImageDecodeObserver.onImageDecoded(bitmap, uri, finalSampleSize, ImageReturnedFrom.DISK);
 				} else {
-					mImageDecodeObserver.onImageDecodeFailed(uri, sampleSize, errorMessage);
+					mImageDecodeObserver.onImageDecodeFailed(uri, finalSampleSize, errorMessage);
 				}
 			}
 		};

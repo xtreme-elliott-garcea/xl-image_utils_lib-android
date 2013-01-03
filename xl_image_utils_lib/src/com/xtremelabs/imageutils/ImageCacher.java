@@ -130,8 +130,7 @@ public class ImageCacher implements ImageDownloadObserver, ImageDecodeObserver, 
 		} else if (requestType == RequestType.REMOTE_REQUEST) {
 			downloadImageFromNetwork(uri, imageCacherListener, scalingInfo);
 		} else if (requestType == RequestType.LOCAL_REQUEST) {
-			
-			decodeBitmapForLocalRequest(uri, imageCacherListener, scalingInfo);
+			decodeBitmapForLocalRequest(uri, imageCacherListener, scalingInfo, sampleSize);
 		}
 
 		return null;
@@ -205,21 +204,9 @@ public class ImageCacher implements ImageDownloadObserver, ImageDecodeObserver, 
 		mDiskCache.getBitmapAsynchronouslyFromDisk(url, sampleSize, ImageReturnedFrom.DISK, true);
 	}
 
-	private void decodeBitmapForLocalRequest(String uri, ImageCacherListener imageCacherListener, ScalingInfo scalingInfo) {
-		int sampleSize = 1;
-		if (scalingInfo.sampleSize != null) {
-			sampleSize = scalingInfo.sampleSize;
-		}
-//		else if (scalingInfo.width != null || scalingInfo.height != null) {
-//			Options options = new Options();
-//			options.inJustDecodeBounds = true;
-//			BitmapFactory.decodeFile(uri, options);
-//			Dimensions dimensions = new Dimensions(options.outWidth, options.outHeight);
-//			sampleSize = mDiskCache.calculateSampleSize(scalingInfo.width, scalingInfo.height, dimensions);
-//		}
-
+	private void decodeBitmapForLocalRequest(String uri, ImageCacherListener imageCacherListener, ScalingInfo scalingInfo, int sampleSize) {
 		mAsyncOperationsMap.registerListenerForDecode(imageCacherListener, uri, sampleSize);
-		mDiskCache.getLocalBitmapAsynchronouslyFromDisk(uri, sampleSize, ImageReturnedFrom.DISK, true);
+		mDiskCache.getLocalBitmapAsynchronouslyFromDisk(uri, scalingInfo, ImageReturnedFrom.DISK, true);
 	}
 
 	private void validateUrl(String url) {
