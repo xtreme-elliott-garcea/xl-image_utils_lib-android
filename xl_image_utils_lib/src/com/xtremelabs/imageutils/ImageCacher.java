@@ -115,7 +115,6 @@ public ImageResponse getBitmap(ImageRequest imageRequest, ImageCacherListener im
 	@Override
 	public int getSampleSize(ImageRequest imageRequest) {
 		ScalingInfo scalingInfo = imageRequest.getScalingInfo();
-
 		int sampleSize;
 		if (scalingInfo.sampleSize != null) {
 			sampleSize = scalingInfo.sampleSize;
