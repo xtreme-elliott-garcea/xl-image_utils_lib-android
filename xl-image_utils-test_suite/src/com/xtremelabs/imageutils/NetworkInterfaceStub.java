@@ -1,6 +1,6 @@
 package com.xtremelabs.imageutils;
 
-public class NetworkStub implements ImageNetworkInterface {
+public class NetworkInterfaceStub implements ImageNetworkInterface {
 
 	@Override
 	public void downloadImageToDisk(String url) {

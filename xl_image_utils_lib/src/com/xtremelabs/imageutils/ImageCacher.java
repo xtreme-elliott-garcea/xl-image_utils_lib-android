@@ -8,8 +8,8 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.os.Build;
 
-import com.xtremelabs.imageutils.AsyncOperationsMaps.AsyncOperationState;
 import com.xtremelabs.imageutils.DiskLRUCacher.FileFormatException;
+import com.xtremelabs.imageutils.ImageResponse.ImageResponseStatus;
 
 /**
  * This class defensively handles requests from four locations: LifecycleReferenceManager, ImageMemoryCacherInterface, ImageDiskCacherInterface, ImageNetworkInterface and the AsyncOperationsMaps.
@@ -17,8 +17,6 @@ import com.xtremelabs.imageutils.DiskLRUCacher.FileFormatException;
  * The job of this class is to "route" messages appropriately in order to ensure synchronized handling of image downloading and caching operations.
  */
 public class ImageCacher implements ImageDownloadObserver, ImageDiskObserver, AsyncOperationsObserver {
-	private static final String PREFIX = "IMAGE CACHER - ";
-
 	private static final String FILE_SYSTEM_SCHEME = "file";
 
 	private static ImageCacher mImageCacher;
@@ -49,15 +47,16 @@ public class ImageCacher implements ImageDownloadObserver, ImageDiskObserver, As
 	}
 	
 	public Bitmap getBitmapForWidget(String url, ImageCacherListener cacherListener, ScalingInfo scalingInfo) {
-	     int sampleSize = getSampleSize(url, scalingInfo);
+		ImageRequest imageRequest = new ImageRequest(url, scalingInfo);
+	     int sampleSize = getSampleSize(imageRequest);
 	     Bitmap bitmap;
 
 	     if (mDiskCache.isCached(url) && sampleSize != -1) {
-	          if ((bitmap = mMemoryCache.getBitmap(url, sampleSize)) != null) {
+	          if ((bitmap = mMemoryCache.getBitmap(new DecodeSignature(url, sampleSize, null))) != null) {
 	               return bitmap;
 	          } else {
 	               try {
-	                    return mDiskCache.getBitmapSynchronouslyFromDisk(url, sampleSize);
+	                    return mDiskCache.getBitmapSynchronouslyFromDisk(new DecodeSignature(url, sampleSize, null));
 	               } catch (FileNotFoundException e) {
 	                    // TODO Auto-generated catch block
 	                    e.printStackTrace();
@@ -67,72 +66,93 @@ public class ImageCacher implements ImageDownloadObserver, ImageDiskObserver, As
 	              }
 	          }
 	     } else {
-	          downloadImageFromNetwork(url, cacherListener, scalingInfo);
+	          downloadImageFromNetwork(imageRequest, cacherListener);
 	     }
 
 	     return null;
 	}
 
-	public Bitmap getBitmap(String uri, ImageCacherListener imageCacherListener, ScalingInfo scalingInfo) {
-		throwExceptionIfNeeded(uri, imageCacherListener, scalingInfo);
+public ImageResponse getBitmap(ImageRequest imageRequest, ImageCacherListener imageCacherListener) {
+		String uri = imageRequest.getUri();
+		throwExceptionIfNeeded(imageRequest, imageCacherListener);
 
-		AsyncOperationState asyncOperationState = mAsyncOperationsMap.queueListenerIfRequestPending(imageCacherListener, uri, scalingInfo);
-
-		switch (asyncOperationState) {
+		switch (mAsyncOperationsMap.queueListenerIfRequestPending(imageRequest, imageCacherListener)) {
 		case QUEUED_FOR_NETWORK_REQUEST:
 			mNetworkInterface.bump(uri);
-			return null;
+			return generateQueuedResponse();
 		case QUEUED_FOR_DECODE_REQUEST:
-			mDiskCache.bumpInQueue(uri, getSampleSize(uri, scalingInfo));
-			return null;
+			mDiskCache.bumpInQueue(new DecodeSignature(uri, getSampleSize(imageRequest), imageRequest.getOptions().preferedConfig));
+			return generateQueuedResponse();
 		case QUEUED_FOR_DETAILS_REQUEST:
-			mDiskCache.bumpInQueue(uri, 0);
-			return null;
+			mDiskCache.bumpInQueue(new DecodeSignature(uri, 0, imageRequest.getOptions().preferedConfig));
+			return generateQueuedResponse();
+		case NOT_QUEUED:
+			break;
+		default:
+			break;
 		}
 
-		int sampleSize = getSampleSize(uri, scalingInfo);
+		int sampleSize = getSampleSize(imageRequest);
 
 		// TODO: Look into removing the sampleSize check.
 
 		if (mDiskCache.isCached(uri) && sampleSize != -1) {
+			DecodeSignature decodeSignature = new DecodeSignature(uri, sampleSize, imageRequest.getOptions().preferedConfig);
 			Bitmap bitmap;
-			if ((bitmap = mMemoryCache.getBitmap(uri, sampleSize)) != null) {
-				return bitmap;
+			if ((bitmap = mMemoryCache.getBitmap(decodeSignature)) != null) {
+				return new ImageResponse(bitmap, ImageReturnedFrom.MEMORY, ImageResponseStatus.SUCCESS);
 			} else {
-				decodeBitmapFromDisk(uri, imageCacherListener, sampleSize);
+				decodeBitmapFromDisk(decodeSignature, imageCacherListener);
 			}
-		} else if (checkIsFileSystemURI(uri)) {
-			retrieveImageDetails(uri, imageCacherListener, scalingInfo);
+		} else if (isFileSystemURI(uri)) {
+			retrieveImageDetails(imageRequest, imageCacherListener);
 		} else {
-			downloadImageFromNetwork(uri, imageCacherListener, scalingInfo);
+			downloadImageFromNetwork(imageRequest, imageCacherListener);
 		}
 
-		return null;
+		return generateQueuedResponse();
 	}
-
 	@Override
-	public int getSampleSize(String url, ScalingInfo scalingInfo) {
+	public int getSampleSize(ImageRequest imageRequest) {
+		ScalingInfo scalingInfo = imageRequest.getScalingInfo();
+
 		int sampleSize;
 		if (scalingInfo.sampleSize != null) {
 			sampleSize = scalingInfo.sampleSize;
 		} else {
-			sampleSize = mDiskCache.getSampleSize(url, scalingInfo.width, scalingInfo.height);
+			sampleSize = mDiskCache.getSampleSize(imageRequest);
 		}
 		return sampleSize;
 	}
 
 	/**
-	 * Caches the image at the provided url to disk. If the image is already on disk, it gets bumped on the eviction queue.
+	 * Caches the image at the provided uri to disk. If the image is already on disk, it gets bumped on the eviction queue.
 	 * 
-	 * @param url
+	 * @param uri
 	 */
-	public synchronized void precacheImage(String url) {
-		validateUri(url);
+	public synchronized void precacheImageToDisk(ImageRequest imageRequest) {
+		String uri = imageRequest.getUri();
+		validateUri(uri);
 
-		if (!mAsyncOperationsMap.isNetworkRequestPendingForUrl(url) && !mDiskCache.isCached(url)) {
-			mNetworkInterface.downloadImageToDisk(url);
+		if (isFileSystemURI(uri)) {
+			return;
+		}
+
+		if (!mAsyncOperationsMap.isNetworkRequestPending(uri) && !mDiskCache.isCached(uri)) {
+			mAsyncOperationsMap.registerListenerForNetworkRequest(imageRequest, new ImageCacherListener() {
+				@Override
+				public void onImageAvailable(ImageResponse imageResponse) {
+					// Intentionally blank.
+				}
+
+				@Override
+				public void onFailure(String message) {
+					// Intentionally blank.
+				}
+			});
+			mNetworkInterface.downloadImageToDisk(uri);
 		} else {
-			mDiskCache.bumpOnDisk(url);
+			mDiskCache.bumpOnDisk(uri);
 		}
 	}
 
@@ -145,25 +165,22 @@ public class ImageCacher implements ImageDownloadObserver, ImageDiskObserver, As
 	}
 
 	public void cancelRequestForBitmap(ImageCacherListener imageCacherListener) {
-		if (Logger.logAll()) {
-			Logger.d(PREFIX + "Cancelling a request.");
-		}
 		mAsyncOperationsMap.cancelPendingRequest(imageCacherListener);
 	}
 
-	private void downloadImageFromNetwork(String uri, ImageCacherListener imageCacherListener, ScalingInfo scalingInfo) {
-		mAsyncOperationsMap.registerListenerForNetworkRequest(imageCacherListener, uri, scalingInfo);
-		mNetworkInterface.downloadImageToDisk(uri);
+	private void downloadImageFromNetwork(ImageRequest imageRequest, ImageCacherListener imageCacherListener) {
+		mAsyncOperationsMap.registerListenerForNetworkRequest(imageRequest, imageCacherListener);
+		mNetworkInterface.downloadImageToDisk(imageRequest.getUri());
 	}
 
-	private void retrieveImageDetails(String uri, ImageCacherListener imageCacherListener, ScalingInfo scalingInfo) {
-		mAsyncOperationsMap.registerListenerForDetailsRequest(imageCacherListener, uri, scalingInfo);
-		mDiskCache.retrieveImageDetails(uri);
+	private void retrieveImageDetails(ImageRequest imageRequest, ImageCacherListener imageCacherListener) {
+		mAsyncOperationsMap.registerListenerForDetailsRequest(imageRequest, imageCacherListener);
+		mDiskCache.retrieveImageDetails(imageRequest.getUri());
 	}
 
-	private void decodeBitmapFromDisk(String uri, ImageCacherListener imageCacherListener, int sampleSize) {
-		mAsyncOperationsMap.registerListenerForDecode(imageCacherListener, uri, sampleSize);
-		mDiskCache.getBitmapAsynchronouslyFromDisk(uri, sampleSize, ImageReturnedFrom.DISK, true);
+	private void decodeBitmapFromDisk(DecodeSignature decodeSignature, ImageCacherListener imageCacherListener) {
+		mAsyncOperationsMap.registerListenerForDecode(decodeSignature, imageCacherListener);
+		mDiskCache.getBitmapAsynchronouslyFromDisk(decodeSignature, ImageReturnedFrom.DISK, true);
 	}
 
 	private void validateUri(String uri) {
@@ -171,21 +188,21 @@ public class ImageCacher implements ImageDownloadObserver, ImageDiskObserver, As
 			throw new IllegalArgumentException("Null URI passed into the image system.");
 	}
 
-	private void throwExceptionIfNeeded(String uri, ImageCacherListener imageCacherListener, ScalingInfo scalingInfo) {
+	private void throwExceptionIfNeeded(ImageRequest imageRequest, ImageCacherListener imageCacherListener) {
 		ThreadChecker.throwErrorIfOffUiThread();
 
-		validateUri(uri);
+		validateUri(imageRequest.getUri());
 
 		if (imageCacherListener == null) {
 			throw new IllegalArgumentException("The ImageCacherListener must not be null.");
 		}
 
-		if (scalingInfo == null) {
+		if (imageRequest.getScalingInfo() == null) {
 			throw new IllegalArgumentException("The ScalingInfo must not be null.");
 		}
 	}
 
-	private static boolean checkIsFileSystemURI(String uri) {
+	private static boolean isFileSystemURI(String uri) {
 		try {
 			URI u = new URI(uri);
 			String scheme = u.getScheme();
@@ -199,20 +216,20 @@ public class ImageCacher implements ImageDownloadObserver, ImageDiskObserver, As
 	}
 
 	public static abstract class ImageCacherListener {
-		public abstract void onImageAvailable(Bitmap bitmap, ImageReturnedFrom returnedFrom);
+		public abstract void onImageAvailable(ImageResponse imageResponse);
 
 		public abstract void onFailure(String message);
 	}
 
 	@Override
-	public void onImageDecoded(Bitmap bitmap, String uri, int sampleSize, ImageReturnedFrom returnedFrom) {
-		mMemoryCache.cacheBitmap(bitmap, uri, sampleSize);
-		mAsyncOperationsMap.onDecodeSuccess(bitmap, uri, sampleSize, returnedFrom);
+	public void onImageDecoded(DecodeSignature decodeSignature, Bitmap bitmap, ImageReturnedFrom returnedFrom) {
+		mMemoryCache.cacheBitmap(bitmap, decodeSignature);
+		mAsyncOperationsMap.onDecodeSuccess(bitmap, returnedFrom, decodeSignature);
 	}
 
 	@Override
-	public void onImageDecodeFailed(String uri, int sampleSize, String message) {
-		mAsyncOperationsMap.onDecodeFailed(uri, sampleSize, message);
+	public void onImageDecodeFailed(DecodeSignature decodeSignature, String message) {
+		mAsyncOperationsMap.onDecodeFailed(decodeSignature, message);
 	}
 
 	@Override
@@ -226,18 +243,22 @@ public class ImageCacher implements ImageDownloadObserver, ImageDiskObserver, As
 	}
 
 	@Override
-	public void onImageDecodeRequired(String uri, int sampleSize) {
-		mDiskCache.getBitmapAsynchronouslyFromDisk(uri, sampleSize, ImageReturnedFrom.NETWORK, false);
+	public void onImageDecodeRequired(DecodeSignature decodeSignature) {
+		mDiskCache.getBitmapAsynchronouslyFromDisk(decodeSignature, ImageReturnedFrom.NETWORK, false);
 	}
 
 	@Override
-	public boolean isNetworkRequestPendingForUrl(String url) {
-		return mNetworkInterface.isNetworkRequestPendingForUrl(url);
+	public boolean isNetworkRequestPending(String uri) {
+		return mNetworkInterface.isNetworkRequestPendingForUrl(uri);
 	}
 
 	@Override
-	public boolean isDecodeRequestPending(DecodeOperationParameters decodeOperationParameters) {
-		return mDiskCache.isDecodeRequestPending(decodeOperationParameters);
+	public boolean isDecodeRequestPending(DecodeSignature decodeSignature) {
+		return mDiskCache.isDecodeRequestPending(decodeSignature);
+	}
+
+	public void setNetworkRequestCreator(NetworkRequestCreator networkRequestCreator) {
+		mNetworkInterface.setNetworkRequestCreator(networkRequestCreator);
 	}
 
 	void stubMemCache(ImageMemoryCacherInterface imageMemoryCacherInterface) {
@@ -269,5 +290,9 @@ public class ImageCacher implements ImageDownloadObserver, ImageDiskObserver, As
 	@Override
 	public void onImageDetailsRequired(String uri) {
 		mDiskCache.retrieveImageDetails(uri);
+	}
+
+	private ImageResponse generateQueuedResponse() {
+		return new ImageResponse(null, null, ImageResponseStatus.REQUEST_QUEUED);
 	}
 }

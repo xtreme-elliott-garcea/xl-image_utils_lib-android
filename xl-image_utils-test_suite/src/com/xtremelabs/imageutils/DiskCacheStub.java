@@ -14,12 +14,8 @@ public class DiskCacheStub implements ImageDiskCacherInterface {
 	}
 
 	@Override
-	public int getSampleSize(String uri, Integer width, Integer height) {
+	public int getSampleSize(ImageRequest imageRequest) {
 		return 0;
-	}
-
-	@Override
-	public void getBitmapAsynchronouslyFromDisk(String uri, int sampleSize, ImageReturnedFrom returnedFrom, boolean noPreviousNetworkRequest) {
 	}
 
 	@Override
@@ -36,15 +32,19 @@ public class DiskCacheStub implements ImageDiskCacherInterface {
 	}
 
 	@Override
-	public void bumpInQueue(String uri, int sampleSize) {
-	}
-
-	@Override
-	public boolean isDecodeRequestPending(DecodeOperationParameters decodeOperationParameters) {
+	public boolean isDecodeRequestPending(DecodeSignature decodeSignature) {
 		return false;
 	}
 
 	@Override
 	public void retrieveImageDetails(String uri) {
+	}
+
+	@Override
+	public void getBitmapAsynchronouslyFromDisk(DecodeSignature decodeSignature, ImageReturnedFrom returnedFrom, boolean noPreviousNetworkRequest) {
+	}
+
+	@Override
+	public void bumpInQueue(DecodeSignature decodeSignature) {
 	}
 }

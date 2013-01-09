@@ -6,17 +6,19 @@ import java.io.FileOutputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
 
+import android.annotation.SuppressLint;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
 import android.os.StrictMode;
 import android.os.StrictMode.ThreadPolicy;
 import android.test.ActivityInstrumentationTestCase2;
 
-import com.example.xl_image_utils_android_testactivity.test.R;
-import com.xtreme.utilities.testing.DelayedLoop;
 import com.xtremelabs.imageutils.DiskLRUCacher.FileFormatException;
+import com.xtremelabs.imageutils.test.R;
+import com.xtremelabs.imageutils.testutils.DelayedLoop;
 import com.xtremelabs.testactivity.MainActivity;
 
+@SuppressLint("NewApi")
 public class DiskLRUCacherTests extends ActivityInstrumentationTestCase2<MainActivity> {
 	private static final String IMAGE_FILE_NAME = "disk_cache_test_image.jpg";
 	private static final String TEST_URI = "file:///my/image.jpg";
@@ -37,23 +39,7 @@ public class DiskLRUCacherTests extends ActivityInstrumentationTestCase2<MainAct
 			loadKittenToFile();
 		}
 
-		mDiskCacher = new DiskLRUCacher(getActivity().getApplicationContext(), new ImageDiskObserver() {
-			@Override
-			public void onImageDecoded(final Bitmap bitmap, final String url, final int sampleSize, final ImageReturnedFrom returnedFrom) {
-			}
-
-			@Override
-			public void onImageDecodeFailed(final String url, final int sampleSize, final String error) {
-			}
-
-			@Override
-			public void onImageDetailsRequestFailed(String uri, final String errorMessage) {
-			}
-
-			@Override
-			public void onImageDetailsRetrieved(final String uri) {
-			}
-		});
+		mDiskCacher = new DiskLRUCacher(getActivity().getApplicationContext(), new BlankImageDiskObserver());
 	}
 
 	@Override
@@ -83,11 +69,11 @@ public class DiskLRUCacherTests extends ActivityInstrumentationTestCase2<MainAct
 			}
 
 			@Override
-			public void onImageDecoded(final Bitmap bitmap, final String uri, final int sampleSize, final ImageReturnedFrom returnedFrom) {
+			public void onImageDecoded(DecodeSignature decodeSignature, Bitmap bitmap, ImageReturnedFrom returnedFrom) {
 			}
 
 			@Override
-			public void onImageDecodeFailed(final String uri, final int sampleSize, final String error) {
+			public void onImageDecodeFailed(DecodeSignature decodeSignature, String error) {
 			}
 		});
 		mDiskCacher.cacheImageDetails(mKittenImageUri);
@@ -103,10 +89,13 @@ public class DiskLRUCacherTests extends ActivityInstrumentationTestCase2<MainAct
 
 		final Dimensions dimensions = mDiskCacher.getImageDimensions(mKittenImageUri);
 
-		int sampleSize = mDiskCacher.getSampleSize(mKittenImageUri, null, null);
+		int sampleSize = mDiskCacher.getSampleSize(new ImageRequest(mKittenImageUri, new ScalingInfo()));
 		assertEquals(1, sampleSize);
 
-		sampleSize = mDiskCacher.getSampleSize(mKittenImageUri, dimensions.getWidth() / 2, dimensions.getHeight() / 2);
+		ScalingInfo scalingInfo = new ScalingInfo();
+		scalingInfo.width = dimensions.width / 2;
+		scalingInfo.height = dimensions.height / 2;
+		sampleSize = mDiskCacher.getSampleSize(new ImageRequest(mKittenImageUri, scalingInfo));
 		assertEquals(2, sampleSize);
 	}
 
@@ -118,7 +107,7 @@ public class DiskLRUCacherTests extends ActivityInstrumentationTestCase2<MainAct
 	public void testGettingPermanentStorageBitmap() {
 		Bitmap bitmap = null;
 		try {
-			bitmap = mDiskCacher.getBitmapSynchronouslyFromDisk(mKittenImageUri, 1);
+			bitmap = mDiskCacher.getBitmapSynchronouslyFromDisk(new DecodeSignature(mKittenImageUri, 1, null));
 		} catch (FileNotFoundException e) {
 			fail();
 		} catch (FileFormatException e) {
@@ -152,19 +141,19 @@ public class DiskLRUCacherTests extends ActivityInstrumentationTestCase2<MainAct
 
 	private class BlankImageDiskObserver implements ImageDiskObserver {
 		@Override
-		public void onImageDecoded(final Bitmap bitmap, final String uri, final int sampleSize, final ImageReturnedFrom returnedFrom) {
-		}
-
-		@Override
-		public void onImageDecodeFailed(final String uri, final int sampleSize, final String error) {
-		}
-
-		@Override
 		public void onImageDetailsRequestFailed(String uri, final String errorMessage) {
 		}
 
 		@Override
 		public void onImageDetailsRetrieved(final String uri) {
+		}
+
+		@Override
+		public void onImageDecoded(DecodeSignature decodeSignature, Bitmap bitmap, ImageReturnedFrom returnedFrom) {
+		}
+
+		@Override
+		public void onImageDecodeFailed(DecodeSignature decodeSignature, String error) {
 		}
 	}
 }

@@ -5,8 +5,10 @@ import android.graphics.Bitmap.Config;
 import android.test.AndroidTestCase;
 import android.test.UiThreadTest;
 
-import com.xtreme.utilities.testing.DelayedLoop;
 import com.xtremelabs.imageutils.ImageCacher.ImageCacherListener;
+import com.xtremelabs.imageutils.ImageRequest.RequestType;
+import com.xtremelabs.imageutils.ImageResponse.ImageResponseStatus;
+import com.xtremelabs.imageutils.testutils.DelayedLoop;
 
 public class ImageCacherTests extends AndroidTestCase {
 	private static final String TEST_URI = "file:///some/directory/with/an/image.jpg";
@@ -33,12 +35,12 @@ public class ImageCacherTests extends AndroidTestCase {
 		mCallComplete = false;
 		mImageCacher.stubAsynchOperationsMaps(new AsyncOperationsMaps(mImageCacher) {
 			@Override
-			public synchronized AsyncOperationState queueListenerIfRequestPending(ImageCacherListener imageCacherListener, String url, ScalingInfo scalingInfo) {
+			public synchronized AsyncOperationState queueListenerIfRequestPending(ImageRequest imageRequest, ImageCacherListener imageCacherListener) {
 				return AsyncOperationState.NOT_QUEUED;
 			}
 
 			@Override
-			public void registerListenerForDetailsRequest(ImageCacherListener imageCacherListener, String uri, ScalingInfo scalingInfo) {
+			public void registerListenerForDetailsRequest(ImageRequest imageRequest, ImageCacherListener imageCacherListener) {
 				mCallComplete = true;
 			}
 		});
@@ -52,15 +54,16 @@ public class ImageCacherTests extends AndroidTestCase {
 			}
 		});
 
-		assertNull(mImageCacher.getBitmap(TEST_URI, new ImageCacherListener() {
+		ImageRequest imageRequest = new ImageRequest(TEST_URI, new ScalingInfo());
+		assertEquals(ImageResponseStatus.REQUEST_QUEUED, mImageCacher.getBitmap(imageRequest, new ImageCacherListener() {
 			@Override
-			public void onImageAvailable(Bitmap bitmap, ImageReturnedFrom returnedFrom) {
+			public void onImageAvailable(ImageResponse imageResponse) {
 			}
 
 			@Override
 			public void onFailure(String message) {
 			}
-		}, new ScalingInfo()));
+		}).getImageResponseStatus());
 
 		delayedLoop.startLoop();
 		delayedLoop.assertPassed();
@@ -74,7 +77,7 @@ public class ImageCacherTests extends AndroidTestCase {
 
 		mImageCacher.stubAsynchOperationsMaps(new AsyncOperationsMaps(mImageCacher) {
 			@Override
-			public synchronized AsyncOperationState queueListenerIfRequestPending(ImageCacherListener imageCacherListener, String url, ScalingInfo scalingInfo) {
+			public synchronized AsyncOperationState queueListenerIfRequestPending(ImageRequest imageRequest, ImageCacherListener imageCacherListener) {
 				return AsyncOperationState.QUEUED_FOR_DETAILS_REQUEST;
 			}
 		});
@@ -86,8 +89,8 @@ public class ImageCacherTests extends AndroidTestCase {
 			}
 
 			@Override
-			public void bumpInQueue(String uri, int sampleSize) {
-				if (sampleSize == 0) {
+			public void bumpInQueue(DecodeSignature decodeSignature) {
+				if (decodeSignature.mSampleSize == 0) {
 					delayedLoop.flagSuccess();
 				} else {
 					delayedLoop.flagFailure();
@@ -95,15 +98,16 @@ public class ImageCacherTests extends AndroidTestCase {
 			}
 		});
 
-		assertNull(mImageCacher.getBitmap(TEST_URI, new ImageCacherListener() {
+		ImageRequest imageRequest = new ImageRequest(TEST_URI, new ScalingInfo());
+		assertEquals(ImageResponseStatus.REQUEST_QUEUED, mImageCacher.getBitmap(imageRequest, new ImageCacherListener() {
 			@Override
-			public void onImageAvailable(Bitmap bitmap, ImageReturnedFrom returnedFrom) {
+			public void onImageAvailable(ImageResponse imageResponse) {
 			}
 
 			@Override
 			public void onFailure(String message) {
 			}
-		}, new ScalingInfo()));
+		}).getImageResponseStatus());
 
 		delayedLoop.startLoop();
 		delayedLoop.assertPassed();
@@ -114,7 +118,7 @@ public class ImageCacherTests extends AndroidTestCase {
 
 		mImageCacher.stubAsynchOperationsMaps(new AsyncOperationsMaps(mImageCacher) {
 			@Override
-			public synchronized AsyncOperationState queueListenerIfRequestPending(ImageCacherListener imageCacherListener, String url, ScalingInfo scalingInfo) {
+			public synchronized AsyncOperationState queueListenerIfRequestPending(ImageRequest imageRequest, ImageCacherListener imageCacherListener) {
 				return AsyncOperationState.NOT_QUEUED;
 			}
 		});
@@ -126,31 +130,32 @@ public class ImageCacherTests extends AndroidTestCase {
 			}
 
 			@Override
-			public int getSampleSize(String uri, Integer width, Integer height) {
+			public int getSampleSize(ImageRequest imageRequest) {
 				return 1;
 			}
 		});
 
 		mImageCacher.stubMemCache(new MemCacheStub() {
 			@Override
-			public Bitmap getBitmap(String url, int sampleSize) {
+			public Bitmap getBitmap(DecodeSignature decodeSignature) {
 				return Bitmap.createBitmap(100, 100, Config.RGB_565);
 			}
 		});
 
-		Bitmap bitmap = mImageCacher.getBitmap(TEST_URI, new ImageCacherListener() {
+		ImageRequest imageRequest = new ImageRequest(TEST_URI, new ScalingInfo());
+		ImageResponse imageResponse = mImageCacher.getBitmap(imageRequest, new ImageCacherListener() {
 			@Override
-			public void onImageAvailable(Bitmap bitmap, ImageReturnedFrom returnedFrom) {
+			public void onImageAvailable(ImageResponse imageResponse) {
 			}
 
 			@Override
 			public void onFailure(String message) {
 			}
-		}, new ScalingInfo());
+		});
 
-		assertNotNull(bitmap);
-		assertEquals(100, bitmap.getWidth());
-		assertEquals(100, bitmap.getHeight());
+		assertNotNull(imageResponse);
+		assertEquals(100, imageResponse.getBitmap().getWidth());
+		assertEquals(100, imageResponse.getBitmap().getHeight());
 	}
 
 	public void testImageDetailsRetrieved() {
@@ -187,5 +192,100 @@ public class ImageCacherTests extends AndroidTestCase {
 		mImageCacher.onImageDetailsRequestFailed(TEST_URI, "Forced failure.");
 		delayedLoop.startLoop();
 		delayedLoop.assertPassed();
+	}
+
+	public void testSuccessfulMemcacheRetrieval() {
+		final DelayedLoop delayedLoop = new DelayedLoop(1000);
+
+		mImageCacher.stubAsynchOperationsMaps(new AsyncOperationsMaps(mImageCacher) {
+			@Override
+			public synchronized AsyncOperationState queueListenerIfRequestPending(ImageRequest imageRequest, ImageCacherListener imageCacherListener) {
+				return AsyncOperationState.NOT_QUEUED;
+			}
+		});
+
+		mImageCacher.stubDiskCache(new DiskCacheStub() {
+			@Override
+			public int getSampleSize(ImageRequest imageRequest) {
+				return 1;
+			}
+
+			@Override
+			public boolean isCached(String uri) {
+				return true;
+			}
+		});
+
+		mImageCacher.stubMemCache(new MemCacheStub() {
+			@Override
+			public Bitmap getBitmap(DecodeSignature decodeSignature) {
+				if (decodeSignature == null || decodeSignature.mSampleSize != 1 || decodeSignature.mUri != TEST_URI) {
+					delayedLoop.flagFailure();
+					return null;
+				}
+
+				delayedLoop.flagSuccess();
+				return Bitmap.createBitmap(100, 100, Config.RGB_565);
+			}
+		});
+
+		ImageResponse imageResponse = mImageCacher.getBitmap(new ImageRequest(TEST_URI, new ScalingInfo()), new ImageCacherListener() {
+			@Override
+			public void onImageAvailable(ImageResponse imageResponse) {
+				delayedLoop.flagFailure();
+			}
+
+			@Override
+			public void onFailure(String message) {
+				delayedLoop.flagFailure();
+			}
+		});
+
+		delayedLoop.startLoop();
+		delayedLoop.assertPassed();
+
+		assertNotNull(imageResponse);
+		assertNotNull(imageResponse.getBitmap());
+		assertEquals(100, imageResponse.getBitmap().getWidth());
+		assertEquals(ImageReturnedFrom.MEMORY, imageResponse.getImageReturnedFrom());
+		assertEquals(ImageResponseStatus.SUCCESS, imageResponse.getImageResponseStatus());
+	}
+
+	public void testPrecacheImageToDisk() {
+		final DelayedLoop delayedLoop = new DelayedLoop(2000);
+		mCallComplete = false;
+
+		mImageCacher.stubAsynchOperationsMaps(new AsyncOperationsMaps(mImageCacher) {
+			@Override
+			public synchronized void registerListenerForNetworkRequest(ImageRequest imageRequest, ImageCacherListener imageCacherListener) {
+				if (imageRequest != null && imageRequest.getRequestType() == RequestType.CACHE_TO_DISK) {
+					delayedLoop.flagSuccess();
+				} else {
+					delayedLoop.flagFailure();
+				}
+			}
+		});
+
+		mImageCacher.stubNetwork(new NetworkInterfaceStub() {
+			@Override
+			public void downloadImageToDisk(String url) {
+				mCallComplete = true;
+			}
+		});
+
+		mImageCacher.stubDiskCache(new DiskCacheStub() {
+			@Override
+			public boolean isCached(String uri) {
+				return false;
+			}
+		});
+
+		ImageRequest imageRequest = new ImageRequest("random URI");
+		imageRequest.setRequestType(RequestType.CACHE_TO_DISK);
+		mImageCacher.precacheImageToDisk(imageRequest);
+
+		delayedLoop.startLoop();
+		delayedLoop.assertPassed();
+		assertTrue(mCallComplete);
 	}
 }

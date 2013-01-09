@@ -1,19 +1,3 @@
-/*
- * Copyright 2012 Xtreme Labs
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package com.xtremelabs.imageutils;
 
 import java.util.HashMap;
@@ -27,26 +11,24 @@ class SizeEstimatingMemoryLRUCacher implements ImageMemoryCacherInterface {
 	private long mMaximumSizeInBytes = 6 * 1024 * 1024; // 6MB default
 	private long mSize = 0;
 
-	private HashMap<DecodeOperationParameters, Bitmap> mCache = new HashMap<DecodeOperationParameters, Bitmap>();
-	private LinkedList<EvictionQueueContainer> mEvictionQueue = new LinkedList<EvictionQueueContainer>();
+	private final HashMap<DecodeSignature, Bitmap> mCache = new HashMap<DecodeSignature, Bitmap>();
+	private final LinkedList<DecodeSignature> mEvictionQueue = new LinkedList<DecodeSignature>();
 
 	@Override
-	public synchronized Bitmap getBitmap(String url, int sampleSize) {
-		DecodeOperationParameters params = new DecodeOperationParameters(url, sampleSize);
-		Bitmap bitmap = mCache.get(params);
+	public synchronized Bitmap getBitmap(DecodeSignature decodeSignature) {
+		Bitmap bitmap = mCache.get(decodeSignature);
 		if (bitmap != null) {
-			onEntryHit(url, sampleSize);
+			onEntryHit(decodeSignature);
 			return bitmap;
 		}
 		return null;
 	}
 
 	@Override
-	public synchronized void cacheBitmap(Bitmap bitmap, String url, int sampleSize) {
-		DecodeOperationParameters params = new DecodeOperationParameters(url, sampleSize);
-		mCache.put(params, bitmap);
+	public synchronized void cacheBitmap(Bitmap bitmap, DecodeSignature decodeSignature) {
+		mCache.put(decodeSignature, bitmap);
 		mSize += getBitmapSize(bitmap);
-		onEntryHit(url, sampleSize);
+		onEntryHit(decodeSignature);
 	}
 
 	@Override
@@ -62,14 +44,12 @@ class SizeEstimatingMemoryLRUCacher implements ImageMemoryCacherInterface {
 		performEvictions();
 	}
 
-	private synchronized void onEntryHit(String url, int sampleSize) {
-		EvictionQueueContainer container = new EvictionQueueContainer(url, sampleSize);
-
-		if (mEvictionQueue.contains(container)) {
-			mEvictionQueue.remove(container);
-			mEvictionQueue.add(container);
+	private synchronized void onEntryHit(DecodeSignature decodeSignature) {
+		if (mEvictionQueue.contains(decodeSignature)) {
+			mEvictionQueue.remove(decodeSignature);
+			mEvictionQueue.add(decodeSignature);
 		} else {
-			mEvictionQueue.add(container);
+			mEvictionQueue.add(decodeSignature);
 			performEvictions();
 		}
 	}
@@ -77,8 +57,8 @@ class SizeEstimatingMemoryLRUCacher implements ImageMemoryCacherInterface {
 	private synchronized void performEvictions() {
 		while (mSize > mMaximumSizeInBytes) {
 			try {
-				EvictionQueueContainer container = mEvictionQueue.removeFirst();
-				Bitmap bitmap = mCache.remove(new DecodeOperationParameters(container.getUrl(), container.getSampleSize()));
+				DecodeSignature decodeSignature = mEvictionQueue.removeFirst();
+				Bitmap bitmap = mCache.remove(decodeSignature);
 				mSize -= getBitmapSize(bitmap);
 			} catch (NoSuchElementException e) {
 				mSize = 0;

@@ -12,10 +12,10 @@ import android.os.Handler;
 import android.util.Log;
 import android.widget.ImageView;
 
+import com.xtremelabs.imageutils.ImageRequest.RequestType;
 import com.xtremelabs.imageutils.ThreadChecker.CalledFromWrongThreadException;
 
 public abstract class AbstractImageLoader {
-	// TODO: Add optional logging levels.
 	public static final String TAG = "ImageLoader";
 
 	private final ImageViewReferenceMapper mViewMapper = new ImageViewReferenceMapper();
@@ -26,10 +26,9 @@ public abstract class AbstractImageLoader {
 
 	private Options mDefaultOptions = new Options();
 
-	// TODO: Have an API call that can get a bitmap without an ImageView.
-	// TODO: Have an API call that can take a Bitmap without a network request?
-	// TODO: Make a loadImage call that operates off the UI thread, or make the
-	// loadImage calls compatible with non-UI threads.
+	// TODO Cancelled network calls should still save the downloaded image to disk.
+	// TODO Have an API call that can get a bitmap without an ImageView.
+	// TODO Make the disk thread pool a priority pool so that preloaded images take lower priority until directly requested.
 
 	/**
 	 * Instantiates a new {@link ImageLoader} that maps all requests to the provided {@link Activity}.
@@ -86,71 +85,108 @@ public abstract class AbstractImageLoader {
 	}
 
 	/**
-	 * This method must be called from the UI thread.
+	 * Allows the usage of custom network libraries. If a {@link NetworkRequestCreator} is provided to the image system, all network calls will go through that interface.
 	 * 
-	 * Loads the image located at the provided URL into the provided {@link ImageView}. The image will be cached in both the disk cache and in the RAM cache.
-	 * 
-	 * If called multiple times for the same ImageView, only the last requested image will be loaded into the view.
-	 * 
+	 * @param appContext
+	 * @param networkRequestCreator
+	 */
+	public static void setNetworkRequestCreator(Context appContext, NetworkRequestCreator networkRequestCreator) {
+		ImageCacher.getInstance(appContext).setNetworkRequestCreator(networkRequestCreator);
+	}
+
+	/**
+	 * Loads the image located at the provided URI into the provided {@link ImageView}.<br>
+	 * <br>
+	 * If the URI is referring to a location on the web, the image will be cached both on disk and in memory. If the URI is a local file system URI, the image will be cached in memory.<br>
+	 * <br>
+	 * If loadImage is called for an ImageView multiple times, only the most recently requested image will be loaded into the view.<br>
+	 * <br>
 	 * This method uses the ImageLoader's default options. The default options can be changed using the "setDefaultOptions" method.
 	 * 
 	 * @param imageView
-	 *            The view object that will receive the image requested.
-	 * @param url
-	 *            Location of the image on the web.
+	 *            The bitmap will automatically be loaded to this view.<br>
+	 * @param uri
+	 *            Location of the image. The URI can refer to an image located either on the local file system or on the web (URL).<br>
+	 * <br>
+	 *            The URI scheme for local file system requests is "file".<br>
+	 *            File system URI example: "file:///this/is/the/image/path/image.jpg".<br>
+	 *            If using a file system URI, the image will be cached in the memory cache.<br>
 	 */
-	public void loadImage(ImageView imageView, String url) {
+	/*
+	 * FIXME Potential memory leak - This method is not synchronized. If onDestroy is called while this is running, it is possible that references will be retained to the Activity or Fragment. Review this for all
+	 * loadImage calls.
+	 */
+	public void loadImage(ImageView imageView, String uri) {
 		if (!mDestroyed) {
 			ImageManagerListener imageManagerListener = getDefaultImageManagerListener(mDefaultOptions);
-			performImageRequestOnUiThread(imageView, url, mDefaultOptions, imageManagerListener);
+			performImageRequestOnUiThread(imageView, uri, mDefaultOptions, imageManagerListener);
 		} else {
 			Log.w(TAG, "WARNING: loadImage was called after the ImageLoader was destroyed.");
 		}
 	}
 
 	/**
-	 * This method must be called from the UI thread.
-	 * 
-	 * Loads the image located at the provided URL into the provided {@link ImageView}. The image will be cached in both the disk cache and in the RAM cache.
-	 * 
-	 * If called multiple times for the same ImageView, only the last requested image will be loaded into the view.
+	 * This call is identical to {@link #loadImage(ImageView, String)}, only it allows the developer to provide custom options for the request. See {@link Options}.
 	 * 
 	 * @param imageView
-	 *            The view object that will receive the image requested.
-	 * @param url
-	 *            Location of the image on the web.
+	 *            The bitmap will automatically be loaded to this view.<br>
+	 * <br>
+	 * @param uri
+	 *            Location of the image. The URI can refer to an image located either on the local file system or on the web (URL).<br>
+	 * <br>
+	 *            The URI scheme for local file system requests is "file".<br>
+	 *            File system URI example: "file:///this/is/the/image/path/image.jpg".<br>
+	 *            If using a file system URI, the image will be cached in the memory cache.<br>
+	 * <br>
 	 * @param options
-	 *            If options is set to null, the {@link ImageLoader} will use the default options. See the {@link Options} docs for additional details.
+	 *            If options is set to null, the {@link ImageLoader} will use the default options. The default options can be modified by calling {@link #setDefaultOptions(Options)}. See the {@link Options} docs for
+	 *            additional details.
 	 */
-	public void loadImage(ImageView imageView, String url, Options options) {
+	public void loadImage(ImageView imageView, String uri, Options options) {
 		if (!mDestroyed) {
 			if (options == null) {
 				options = mDefaultOptions;
 			}
 
 			ImageManagerListener imageManagerListener = getDefaultImageManagerListener(options);
-			performImageRequestOnUiThread(imageView, url, options, imageManagerListener);
+			performImageRequestOnUiThread(imageView, uri, options, imageManagerListener);
 		} else {
 			Log.w(TAG, "WARNING: loadImage was called after the ImageLoader was destroyed.");
 		}
 	}
 
 	/**
-	 * Downloads and caches the image at the provided URL. The image will be cached in both the disk cache and in the RAM cache.
-	 * 
-	 * The image WILL NOT BE LOADED to the {@link ImageView}. Instead, the {@link ImageLoaderListener} will have its onImageAvailable() method called on the UI thread with a reference to both the {@link ImageView} and
-	 * the {@link Bitmap}. You will have to load the bitmap to the view yourself
-	 * 
-	 * This method is useful if you want to perform some kind of animation when loading displaying the bitmap.
+	 * Loads the image located at the provided URI. If the image is located on the web, it will be cached on disk and in memory. If the image is located on the file system, it will be cached in memory.<br>
+	 * <br>
+	 * The image WILL NOT BE AUTOMATICALLY LOADED to the {@link ImageView}. Instead, the {@link ImageLoaderListener} will have its onImageAvailable() method called on the UI thread with a reference to both the
+	 * {@link ImageView} and the bitmap. It is up to the developer to load the bitmap to the view.<br>
+	 * <br>
+	 * This method should be used if the app needs to:<br>
+	 * - perform additional logic when the bitmap is returned<br>
+	 * - manually handle image failures<br>
+	 * - animate the bitmap.<br>
+	 * <br>
 	 * 
 	 * @param imageView
-	 *            The view object that will receive the image requested.
-	 * @param url
-	 *            Location of the image on the web.
+	 *            The view that will be displaying the image. The bitmap will not be loaded directly into this view. Rather, a reference to the bitmap and to the ImageView will be passed back to the
+	 *            {@link ImageLoaderListener}.<br>
+	 * <br>
+	 * @param uri
+	 *            Location of the image. The URI can refer to an image located either on the local file system or on the web (URL).<br>
+	 * <br>
+	 *            The URI scheme for local file system requests is "file".<br>
+	 *            File system URI example: "file:///this/is/the/image/path/image.jpg".<br>
+	 *            If using a file system URI, the image will be cached in the memory cache.<br>
+	 * <br>
 	 * @param options
-	 *            If options is set to null, the {@link ImageLoader} will use the default options. See the {@link Options} docs for additional details.
+	 *            If options is set to null, the {@link ImageLoader} will use the default options. The default options can be modified by calling {@link #setDefaultOptions(Options)}. See the {@link Options} docs for
+	 *            additional details.<br>
+	 * <br>
+	 * @param listener
+	 *            This listener will be called once the image request is complete. If the bitmap was retrieved successfully, the
+	 *            {@link ImageLoaderListener#onImageAvailable(ImageView, android.graphics.Bitmap, ImageReturnedFrom)} method will be called.
 	 */
-	public void loadImage(ImageView imageView, String url, Options options, final ImageLoaderListener listener) {
+	public void loadImage(ImageView imageView, String uri, Options options, final ImageLoaderListener listener) {
 		if (!mDestroyed) {
 			if (listener == null) {
 				throw new IllegalArgumentException("You cannot pass in a null ImageLoadingListener.");
@@ -161,35 +197,38 @@ public abstract class AbstractImageLoader {
 			}
 
 			ImageManagerListener imageManagerListener = getImageManagerListenerWithCallback(listener, options);
-			performImageRequestOnUiThread(imageView, url, options, imageManagerListener);
+			performImageRequestOnUiThread(imageView, uri, options, imageManagerListener);
 		} else {
 			Log.w(TAG, "WARNING: loadImage was called after the ImageLoader was destroyed.");
 		}
 	}
 
 	/**
-	 * This method will load the selected resource into the {@link ImageView} and cancel any previous requests that have been made with the provided {@link ImageView}.
+	 * This method will load the selected resource into the {@link ImageView} and cancel any previous requests that have been made to the {@link ImageView}.
 	 * 
 	 * @param imageView
 	 * @param resourceId
-	 * 
-	 * @throws CalledFromWrongThreadException
-	 *             This is thrown if the method is called from off the UI thread.
 	 */
-	public void loadImageFromResource(ImageView imageView, int resourceId) {
-		if (!mDestroyed) {
-			ThreadChecker.throwErrorIfOffUiThread();
+	public synchronized void loadImageFromResource(final ImageView imageView, final int resourceId) {
+		if (ThreadChecker.isOnUiThread()) {
+			if (!mDestroyed) {
+				ThreadChecker.throwErrorIfOffUiThread();
 
-			mViewMapper.removeListener(imageView);
-			imageView.setImageResource(resourceId);
+				mViewMapper.removeListener(imageView);
+				imageView.setImageResource(resourceId);
+			}
+		} else {
+			new Handler(mApplicationContext.getMainLooper()).post(new Runnable() {
+				@Override
+				public void run() {
+					loadImageFromResource(imageView, resourceId);
+				}
+			});
 		}
 	}
 
 	// TODO: Make an API call that will load the bitmap into place with an
 	// animation
-
-	// TODO: Have a load image call that accepts a resource ID rather than
-	// making the user stop the load manually.
 
 	// TODO: Return a boolean indicating whether an image load was actually
 	// stopped.
@@ -220,36 +259,14 @@ public abstract class AbstractImageLoader {
 	}
 
 	/**
-	 * COMPATIBILITY: API levels 11 and under
-	 * 
-	 * PLEASE SEE setMaximumMemCacheSize for adjusting the memcache size for devices API level 12+.
-	 * 
-	 * Sets the maximum number of images that will be contained within the memory cache.
-	 * 
+	 * Sets the maximum size of the memory cache in bytes.<br>
+	 * <br>
 	 * WARNING: Setting the memory cache size value too high will result in OutOfMemory exceptions. Developers should test their apps thoroughly and modify the value set using this method based on memory consumption and
-	 * app performance. A larger cache size = higher performance but worse memory usage. A smaller cache size means worse performance but better memory usage.
-	 * 
-	 * @param numImages
-	 *            The number of images that can be stored within the memory cache.
-	 */
-	public void setMemCacheSize(int numImages) {
-		if (Build.VERSION.SDK_INT <= 11) {
-			ImageCacher.getInstance(mApplicationContext).setMaximumCacheSize(numImages);
-		}
-	}
-
-	/**
-	 * COMPATIBILITY: API levels 12+
-	 * 
-	 * PLEASE SEE setMemCacheSize for adjusting the memcache size for devices API level 11 and under.
-	 * 
-	 * Sets the maximum size of the memory cache in bytes.
-	 * 
-	 * WARNING: Setting the memory cache size value too high will result in OutOfMemory exceptions. Developers should test their apps thoroughly and modify the value set using this method based on memory consumption and
-	 * app performance. A larger cache size = higher performance but worse memory usage. A smaller cache size means worse performance but better memory usage.
+	 * app performance. A larger cache size means better performance but worse memory usage. A smaller cache size means worse performance but better memory usage.<br>
+	 * <br>
+	 * The image system will only violate the maximum size specified if a single image is loaded that is larger than the specified maximum size.
 	 * 
 	 * @param maxSizeInBytes
-	 *            The maximum size of the memory cache in bytes.
 	 */
 	public void setMaximumMemCacheSize(long maxSizeInBytes) {
 		if (Build.VERSION.SDK_INT >= 12) {
@@ -258,35 +275,72 @@ public abstract class AbstractImageLoader {
 	}
 
 	/**
-	 * This method must be called from the UI thread.
+	 * Caches the image at the provided URI into the disk cache. This call is asynchronous and cannot be cancelled once called.<br>
+	 * <br>
+	 * Ideal use cases for this method:<br>
+	 * - Pre-cache large images when the user is likely to display them shortly. This will not increase memory usage, but will drastically speed up image load times.<br>
+	 * - Pre-cache ListView images.<br>
+	 * <br>
+	 * File system URIs will be ignored by the caching system, as these images are already on disk.
 	 * 
-	 * Caches the image at the provided URL into the disk cache. This call is asynchronous and cannot be cancelled once called.
-	 * 
-	 * This call is useful when pre-caching large images, as they will not increase RAM usage, but will speed up image load times.
-	 * 
-	 * @param url
+	 * @param uri
 	 * @param applicationContext
-	 * 
-	 * @throws CalledFromWrongThreadException
-	 *             This is thrown if the method is called from off the UI thread.
 	 */
-	public static void precacheImageToDisk(String url, Context applicationContext) {
-		ThreadChecker.throwErrorIfOffUiThread();
-
-		ImageCacher.getInstance(applicationContext).precacheImage(url);
+	// TODO Test what happens if precache image to disk is called with a file system URI.
+	public void precacheImageToDisk(final String uri) {
+		if (ThreadChecker.isOnUiThread()) {
+			ImageRequest imageRequest = new ImageRequest(uri);
+			imageRequest.setRequestType(RequestType.CACHE_TO_DISK);
+			ImageCacher.getInstance(mApplicationContext).precacheImageToDisk(imageRequest);
+		} else {
+			new Handler(mApplicationContext.getMainLooper()).post(new Runnable() {
+				@Override
+				public void run() {
+					precacheImageToDisk(uri, mApplicationContext);
+				}
+			});
+		}
 	}
 
 	/**
-	 * This method must be called from the UI thread.
+	 * Caches the image at the provided URI into the disk cache. This call is asynchronous and cannot be cancelled once called.<br>
+	 * <br>
+	 * Ideal use cases for this method:<br>
+	 * - Pre-cache large images when the user is likely to display them shortly. This will not increase memory usage, but will drastically speed up image load times.<br>
+	 * - Pre-cache ListView images.<br>
+	 * <br>
+	 * File system URIs will be ignored by the caching system, as these images are already on disk.
 	 * 
-	 * Caches the image at the provided URL into both the disk cache and into the memory cache.
-	 * 
-	 * This method call is useful for pre-caching smaller images. If used for a ListView that has many small images, the quality of scrolling will be vastly improved.
-	 * 
+	 * @param uri
+	 * @param applicationContext
+	 */
+	// TODO Test what happens if precache image to disk is called with a file system URI.
+	public static void precacheImageToDisk(final String uri, final Context applicationContext) {
+		if (ThreadChecker.isOnUiThread()) {
+			ImageRequest imageRequest = new ImageRequest(uri);
+			imageRequest.setRequestType(RequestType.CACHE_TO_DISK);
+			ImageCacher.getInstance(applicationContext).precacheImageToDisk(imageRequest);
+		} else {
+			new Handler(applicationContext.getMainLooper()).post(new Runnable() {
+				@Override
+				public void run() {
+					precacheImageToDisk(uri, applicationContext);
+				}
+			});
+		}
+	}
+
+	/**
+	 * This method must be called from the UI thread.<br>
+	 * <br>
+	 * Caches the image at the provided URL into both the disk cache and into the memory cache.<br>
+	 * <br>
+	 * This method call is useful for pre-caching smaller images. If used for a ListView that has many small images, the quality of scrolling will be vastly improved.<br>
+	 * <br>
 	 * The Width and Height allow you to specify the size of the view that the image will be loaded to. If the image is significantly larger than the provided width and/or height, the image will be scaled down in memory,
 	 * allowing for significant improvements to memory usage and performance, at no cost to image detail.
 	 * 
-	 * @param url
+	 * @param uri
 	 * @param applicationContext
 	 * @param width
 	 *            See comment above. Pass in NULL if you want the width to be ignored.
@@ -296,14 +350,32 @@ public abstract class AbstractImageLoader {
 	 * @throws CalledFromWrongThreadException
 	 *             This is thrown if the method is called from off the UI thread.
 	 */
-	public void precacheImageToDiskAndMemory(String url, Context applicationContext, Integer width, Integer height) {
+	public void precacheImageToDiskAndMemory(String uri, Integer width, Integer height) {
 		// TODO: Replace the width and height with options?
 		ThreadChecker.throwErrorIfOffUiThread();
 
 		ScalingInfo scalingInfo = new ScalingInfo();
 		scalingInfo.height = height;
 		scalingInfo.width = width;
-		mReferenceManager.getBitmap(applicationContext, url, getBlankImageManagerListener(), scalingInfo);
+
+		ImageRequest imageRequest = new ImageRequest(uri, scalingInfo);
+		mReferenceManager.getBitmap(mApplicationContext, imageRequest, getBlankImageManagerListener());
+	}
+
+	/**
+	 * Please use {@link #precacheImageToDiskAndMemory(String, Integer, Integer)}.
+	 */
+	@Deprecated
+	public void precacheImageToDiskAndMemory(String uri, Context applicationContext, Integer width, Integer height) {
+		// TODO: Replace the width and height with options?
+		ThreadChecker.throwErrorIfOffUiThread();
+
+		ScalingInfo scalingInfo = new ScalingInfo();
+		scalingInfo.height = height;
+		scalingInfo.width = width;
+
+		ImageRequest imageRequest = new ImageRequest(uri, scalingInfo);
+		mReferenceManager.getBitmap(applicationContext, imageRequest, getBlankImageManagerListener());
 	}
 
 	protected void initKeyAndAppContext(Object key, Context applicationContext) {
@@ -315,27 +387,29 @@ public abstract class AbstractImageLoader {
 		mReferenceManager = referenceManager;
 	}
 
-	private void performImageRequestOnUiThread(final ImageView imageView, final String url, final Options options, final ImageManagerListener imageManagerListener) {
+	private void performImageRequestOnUiThread(final ImageView imageView, final String uri, final Options options, final ImageManagerListener imageManagerListener) {
 		if (ThreadChecker.isOnUiThread())
-			performImageRequest(imageView, url, options, imageManagerListener);
+			performImageRequest(imageView, uri, options, imageManagerListener);
 		else {
 			new Handler(mApplicationContext.getMainLooper()).post(new Runnable() {
 
 				@Override
 				public void run() {
 					if (!mDestroyed)
-						performImageRequest(imageView, url, options, imageManagerListener);
+						performImageRequest(imageView, uri, options, imageManagerListener);
 				}
 			});
 		}
 	}
 
-	private void performImageRequest(ImageView imageView, String url, Options options, ImageManagerListener imageManagerListener) {
+	private void performImageRequest(ImageView imageView, String uri, Options options, ImageManagerListener imageManagerListener) {
 		mapImageView(imageView, imageManagerListener);
 		setPreLoadImage(imageView, options);
 
 		ScalingInfo scalingInfo = getScalingInfo(imageView, options);
-		mReferenceManager.getBitmap(mKey, url, imageManagerListener, scalingInfo);
+
+		ImageRequest imageRequest = new ImageRequest(uri, scalingInfo, options);
+		mReferenceManager.getBitmap(mKey, imageRequest, imageManagerListener);
 	}
 
 	private void setPreLoadImage(ImageView imageView, Options options) {
@@ -357,7 +431,7 @@ public abstract class AbstractImageLoader {
 	 *            The Options lets us know what scaling information we need to retreive, if any.
 	 * @return Returns the information the imageCacher needs to figure out how to decode the downloaded image.
 	 */
-	public ScalingInfo getScalingInfo(ImageView imageView, final Options options) {
+	ScalingInfo getScalingInfo(ImageView imageView, final Options options) {
 		ScalingInfo scalingInfo = new ScalingInfo();
 		if (options.overrideSampleSize != null) {
 			scalingInfo.sampleSize = options.overrideSampleSize;
@@ -372,8 +446,8 @@ public abstract class AbstractImageLoader {
 
 		if (options.useScreenSizeAsBounds) {
 			Dimensions screenSize = DisplayUtility.getDisplaySize(mApplicationContext);
-			width = Math.min(screenSize.getWidth(), width == null ? screenSize.getWidth() : width);
-			height = Math.min(screenSize.getHeight(), height == null ? screenSize.getHeight() : height);
+			width = Math.min(screenSize.width, width == null ? screenSize.width : width);
+			height = Math.min(screenSize.height, height == null ? screenSize.height : height);
 		}
 
 		if (options.autoDetectBounds) {
@@ -424,16 +498,10 @@ public abstract class AbstractImageLoader {
 			}
 
 			@Override
-			public void onImageReceived(Bitmap bitmap, ImageReturnedFrom returnedFrom) {
+			public void onImageReceived(ImageResponse imageResponse) {
 				ImageView imageView = mViewMapper.removeImageView(this);
 				if (imageView != null) {
-					if (Logger.isProfiling()) {
-						Profiler.init("Setting image bitmap for default listener");
-					}
-					imageView.setImageBitmap(bitmap);
-					if (Logger.isProfiling()) {
-						Profiler.report("Setting image bitmap for default listener");
-					}
+					imageView.setImageBitmap(imageResponse.getBitmap());
 				}
 			}
 		};
@@ -458,10 +526,10 @@ public abstract class AbstractImageLoader {
 			}
 
 			@Override
-			public void onImageReceived(Bitmap bitmap, ImageReturnedFrom returnedFrom) {
+			public void onImageReceived(ImageResponse imageResponse) {
 				ImageView imageView = mViewMapper.removeImageView(this);
 				if (imageView != null) {
-					listener.onImageAvailable(imageView, bitmap, returnedFrom);
+					listener.onImageAvailable(imageView, imageResponse.getBitmap(), imageResponse.getImageReturnedFrom());
 				}
 			}
 		};
@@ -479,7 +547,7 @@ public abstract class AbstractImageLoader {
 			}
 
 			@Override
-			public void onImageReceived(Bitmap bitmap, ImageReturnedFrom returnedFrom) {
+			public void onImageReceived(ImageResponse imageResponse) {
 			}
 		};
 	}
@@ -491,63 +559,104 @@ public abstract class AbstractImageLoader {
 	 */
 	public static class Options {
 		/**
-		 * Forces the image to be decoded with the specified sample size. This will override any other parameters that affect the sample size of the image.
-		 * 
-		 * NOTE: This value, if specified, should always be a positive power of 2. The higher the number provided, the further the image will be scaled down.
-		 * 
-		 * Example: A sample size of 2 will decrease the size of the image by 4. A sample size of 4 will decrease the size of the image by 16.
-		 * 
+		 * {@link ScalingPreference#LARGER_THAN_VIEW_OR_FULL_SIZE}<br>
+		 * This option guarantees that the image being returned will be larger than the view's bounds, or it's maximum size. The image may be scaled down if it is possible to do so without becoming smaller than either of
+		 * the provided bounds. The image will not be scaled unless both a width and height bounds are specified.<br>
+		 * <br>
+		 * {@link ScalingPreference#MATCH_TO_LARGER_DIMENSION}<br>
+		 * This option is nearly identical to {@link ScalingPreference#LARGER_THAN_VIEW_OR_FULL_SIZE}. The only difference is that if bounds are provided for only one dimension of the ImageView (ie. width OR height), the
+		 * image may be scaled according to that dimension.<br>
+		 * <br>
+		 * {@link ScalingPreference#MATCH_TO_SMALLER_DIMENSION}<br>
+		 * This option is nearly identical to {@link ScalingPreference#LARGER_THAN_VIEW_OR_FULL_SIZE}. They differ in that if bounds are provided for only one dimension of the ImageView (ie. width OR height), the image
+		 * may be scaled according to that dimension, and if both width and height are provided, the image will scale to best fit within the bounds (as opposed to the other two options above, which will scale to the
+		 * larger of the two dimensions only).<br>
+		 * <br>
+		 * {@link ScalingPreference#ROUND_TO_CLOSEST_MATCH}<br>
+		 * The dimensions of the image returned will be as close to the dimension of the bounds as possible. The bitmap returned may be scaled down to be smaller than the view. This option may degrade image quality, but
+		 * often will consume less memory. This option will give preference to the smaller of the two bounds.<br>
+		 * <br>
+		 * {@link ScalingPreference#SMALLER_THAN_VIEW}<br>
+		 * The dimensions of the image being returned is guaranteed to be equal to or smaller than the size of the bounds provided. This guarantees memory savings in the event that images are larger than the ImageViews
+		 * they are being loaded into.
+		 */
+		public static enum ScalingPreference {
+			SMALLER_THAN_VIEW, ROUND_TO_CLOSEST_MATCH, LARGER_THAN_VIEW_OR_FULL_SIZE, MATCH_TO_LARGER_DIMENSION, MATCH_TO_SMALLER_DIMENSION
+		}
+
+		/**
+		 * Forces the image to be decoded with the specified sample size. This will override any other parameters that affect the sample size of the image.<br>
+		 * <br>
+		 * NOTE: This value, if specified, should always be a positive power of 2. The higher the number provided, the further the image will be scaled down.<br>
+		 * <br>
+		 * Example: A sample size of 2 will decrease the size of the image by 4. A sample size of 4 will decrease the size of the image by 16.<br>
+		 * <br>
 		 * Default value: null.
 		 */
 		public Integer overrideSampleSize = null;
 
 		/**
-		 * If specified, this value allows the cacher to conserve memory by estimating the optimal sample size. This works in conjunction with the widthBounds field, so both can be specified at the same time.
-		 * 
+		 * If specified, this value allows the cacher to conserve memory by estimating the optimal sample size. This works in conjunction with the widthBounds field, so both can be specified at the same time.<br>
+		 * <br>
 		 * Default value: null.
 		 */
 		public Integer heightBounds = null;
 
 		/**
-		 * If specified, this value allows the cacher to conserve memory by estimating the optimal sample size. This works in conjunction with the heightBounds field, so both can be specified at the same time.
-		 * 
+		 * If specified, this value allows the cacher to conserve memory by estimating the optimal sample size. This works in conjunction with the heightBounds field, so both can be specified at the same time.<br>
+		 * <br>
 		 * Default value: null.
 		 */
 		public Integer widthBounds = null;
 
 		/**
-		 * If true, the ImageLoader will attempt to optimize the sample size for the image being returned.
-		 * 
+		 * If true, the ImageLoader will attempt to optimize the sample size for the image being returned.<br>
+		 * <br>
 		 * Default value: true.
 		 */
 		public boolean autoDetectBounds = true;
 
 		/**
-		 * If true, the ImageLoader will select a sample size that will optimize the image size for the size of the screen.
-		 * 
+		 * If true, the ImageLoader will select a sample size that will optimize the image size for the size of the screen.<br>
+		 * <br>
 		 * Default value: true.
 		 */
 		public boolean useScreenSizeAsBounds = true;
 
 		/**
-		 * If set to true, the ImageLoader will, before getting the Bitmap, replace the current image within the ImageView with either a null Bitmap or the image resource indicated by the placeholderImageResourceId.
-		 * 
+		 * The ImageLoader has the ability to automatically scale down images according to the bounds of the ImageView provided, or the bounds specified within this options object. This parameter is a flag for the sample
+		 * size calculation logic that changes how it chooses sample sizes. See {@link ScalingPreference} for further details.
+		 */
+		public ScalingPreference scalingPreference = ScalingPreference.SMALLER_THAN_VIEW;
+
+		/**
+		 * If set to true, the ImageLoader will, before getting the Bitmap, replace the current image within the ImageView with either a null Bitmap or the image resource indicated by the placeholderImageResourceId.<br>
+		 * <br>
 		 * If set to false, the ImageLoader will only attempt to load the requested Bitmap to the view.
 		 */
 		public boolean wipeOldImageOnPreload = true;
 
 		/**
-		 * The ImageLoader will load the resource at this ID prior to making the image request.
-		 * 
+		 * The ImageLoader will load the resource at this ID prior to making the image request.<br>
+		 * <br>
 		 * Default value: null.
 		 */
 		public Integer placeholderImageResourceId = null;
 
 		/**
-		 * In the event that the image load fails, the resource at the provided ID will be loaded into the ImageView.
-		 * 
+		 * In the event that the image load fails, the resource at the provided ID will be loaded into the ImageView.<br>
+		 * <br>
 		 * Default value: null.
 		 */
 		public Integer unsuccessfulLoadResourceId = null;
+
+		/**
+		 * Modify this value to change the colour format of decoded bitmaps. If set to null, the BitmapFactory will automatically select a colour format.<br>
+		 * <br>
+		 * This options can be used to manually raise or lower the bit depth of images, which may result in memory savings.<br>
+		 * <br>
+		 * Default value: null.
+		 */
+		public Bitmap.Config preferedConfig = null;
 	}
 }
