@@ -1,3 +1,19 @@
+/*
+ * Copyright 2013 Xtreme Labs
+ * 
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *     
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.xtremelabs.testactivity;
 
 import java.io.File;
@@ -24,9 +40,11 @@ import android.widget.ImageView;
 import com.xtreme.testactivity.R;
 import com.xtremelabs.imageutils.Dimensions;
 import com.xtremelabs.imageutils.ImageLoader;
+import com.xtremelabs.imageutils.ImageLoaderListener;
 import com.xtremelabs.imageutils.ImagePrecacheAssistant;
 import com.xtremelabs.imageutils.ImagePrecacheAssistant.PrecacheInformationProvider;
 import com.xtremelabs.imageutils.ImagePrecacheAssistant.PrecacheRequest;
+import com.xtremelabs.imageutils.ImageReturnedFrom;
 
 @TargetApi(13)
 public class KittenAdapter extends BaseAdapter {
@@ -113,16 +131,27 @@ public class KittenAdapter extends BaseAdapter {
 			kittenViews = (KittenViews) convertView.getTag();
 
 		if (position % 2 == 0) {
-			mImageLoader.loadImage(kittenViews.kitten1, (String) getItem(position) + "1");
-			mImageLoader.loadImage(kittenViews.kitten2, (String) getItem(position) + "2");
+			mImageLoader.loadImage(kittenViews.kitten1, (String) getItem(position) + "1", null, mListener);
+			mImageLoader.loadImage(kittenViews.kitten2, (String) getItem(position) + "2", null, mListener);
 		} else {
-			Log.d("ImageLoader", "URI: " + (String) getItem(position));
-			mImageLoader.loadImage(kittenViews.kitten1, (String) getItem(position));
-			mImageLoader.loadImage(kittenViews.kitten2, (String) getItem(position));
+			mImageLoader.loadImage(kittenViews.kitten1, (String) getItem(position), null, mListener);
+			mImageLoader.loadImage(kittenViews.kitten2, (String) getItem(position), null, mListener);
 		}
 
 		return convertView;
 	}
+
+	ImageLoaderListener mListener = new ImageLoaderListener() {
+		@Override
+		public void onImageLoadError(String error) {
+			Log.i("ImageLoader", "Image load failed! Message: " + error);
+		}
+
+		@Override
+		public void onImageAvailable(ImageView imageView, Bitmap bitmap, ImageReturnedFrom returnedFrom) {
+			imageView.setImageBitmap(bitmap);
+		}
+	};
 
 	private class KittenViews {
 		ImageView kitten1;

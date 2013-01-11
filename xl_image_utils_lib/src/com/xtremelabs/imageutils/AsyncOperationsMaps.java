@@ -1,3 +1,21 @@
+/*
+ * Copyright 2013 Xtreme Labs
+ * import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+import android.graphics.Bitmap;
+
+import com.xtremelabs.imageutils.ImageCacher.ImageCacherListener;
+import com.xtremelabs.imageutils.ImageRequest.RequestType;
+import com.xtremelabs.imageutils.ImageResponse.ImageResponseStatus;
+import com.xtremelabs.imageutils.OperationTracker.KeyReferenceProvider;
+import com.xtremelabs.imageutils.OperationTracker.OperationTransferer;
+ess or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.xtremelabs.imageutils;
 
 import java.util.HashSet;
@@ -149,8 +167,10 @@ public class AsyncOperationsMaps {
 	public void onDetailsRequestFailed(String uri, String message) {
 		List<RequestParameters> list = mDetailsOperationTracker.removeList(uri, mNetworkAndDetailsKeyReferenceProvider);
 
-		for (RequestParameters networkRequestParameters : list) {
-			networkRequestParameters.mImageCacherListener.onFailure(message);
+		if (list != null) {
+			for (RequestParameters networkRequestParameters : list) {
+				networkRequestParameters.mImageCacherListener.onFailure(message);
+			}
 		}
 	}
 

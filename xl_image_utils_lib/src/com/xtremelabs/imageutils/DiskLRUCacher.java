@@ -1,3 +1,19 @@
+/*
+ * Copyright 2013 Xtreme Labs
+ * 
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *     
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.xtremelabs.imageutils;
 
 import java.io.File;
@@ -10,12 +26,10 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URLEncoder;
 import java.util.HashMap;
-import java.util.List;
 
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.util.Log;
 
 import com.xtremelabs.imageutils.DiskDatabaseHelper.DiskDatabaseHelperObserver;
 
@@ -26,7 +40,6 @@ public class DiskLRUCacher implements ImageDiskCacherInterface {
 	private final DiskManager mDiskManager;
 	private final DiskDatabaseHelper mDatabaseHelper;
 	private ImageDiskObserver mImageDiskObserver;
-	private final CachedImagesMap mCachedImagesMap = new CachedImagesMap();
 	private final MappedQueue<String, Dimensions> mPermanentStorageDimensionsCache = new MappedQueue<String, Dimensions>(MAX_PERMANENT_STORAGE_IMAGE_DIMENSIONS_CACHED);
 	private final HashMap<DecodeSignature, Runnable> mRequestToRunnableMap = new HashMap<DecodeSignature, Runnable>();
 
@@ -41,13 +54,6 @@ public class DiskLRUCacher implements ImageDiskCacherInterface {
 		mDiskManager = new DiskManager("img", appContext);
 		mDatabaseHelper = new DiskDatabaseHelper(appContext, mDiskDatabaseHelperObserver);
 		mImageDiskObserver = imageDecodeObserver;
-
-		List<FileEntry> entries = mDatabaseHelper.getAllEntries();
-		for (FileEntry entry : entries) {
-			if (mDiskManager.isOnDisk(encode(entry.getUri()))) {
-				mCachedImagesMap.putDimensions(entry.getUri(), entry.getDimensions());
-			}
-		}
 	}
 
 	@Override
@@ -57,7 +63,7 @@ public class DiskLRUCacher implements ImageDiskCacherInterface {
 		if (isPermanentStorageUri) {
 			return mPermanentStorageDimensionsCache.contains(uri);
 		} else {
-			return mCachedImagesMap.isCached(uri);
+			return mDatabaseHelper.isCached(uri);
 		}
 	}
 
@@ -99,18 +105,14 @@ public class DiskLRUCacher implements ImageDiskCacherInterface {
 			if (isFileSystemUri) {
 				mPermanentStorageDimensionsCache.addOrBump(uri, dimensions);
 			} else {
-				synchronized (this) {
-					mCachedImagesMap.putDimensions(uri, dimensions);
-					mDatabaseHelper.addOrUpdateFile(uri, file.length(), dimensions.width, dimensions.height);
-					clearLeastUsedFilesInCache();
-				}
+				mDatabaseHelper.addOrUpdateFile(uri, file.length(), dimensions.width, dimensions.height);
+				clearLeastUsedFilesInCache();
 			}
 
 			mImageDiskObserver.onImageDetailsRetrieved(uri);
 		} catch (URISyntaxException e) {
 			mImageDiskObserver.onImageDetailsRequestFailed(uri, "URISyntaxException caught when attempting to retrieve image details. URI: " + uri);
 		} catch (FileNotFoundException e) {
-			Log.d("ImageLoader", "File not found for URI: " + uri);
 			mImageDiskObserver.onImageDetailsRequestFailed(uri, "Image file not found. URI: " + uri);
 		}
 	}
@@ -180,7 +182,12 @@ public class DiskLRUCacher implements ImageDiskCacherInterface {
 		if (isFromPermanentStorage) {
 			dimensions = mPermanentStorageDimensionsCache.getValue(uri);
 		} else {
-			dimensions = mCachedImagesMap.getImageDimensions(uri);
+			FileEntry fileEntry = mDatabaseHelper.getFileEntryFromCache(uri);
+			if (fileEntry != null) {
+				dimensions = fileEntry.getDimensions();
+			} else {
+				dimensions = null;
+			}
 		}
 
 		return dimensions;
@@ -239,14 +246,8 @@ public class DiskLRUCacher implements ImageDiskCacherInterface {
 		return bitmap;
 	}
 
-	private synchronized void clearLeastUsedFilesInCache() {
-		while (mDatabaseHelper.getTotalSizeOnDisk() > mMaximumCacheSizeInBytes) {
-			FileEntry lru = mDatabaseHelper.getLRU();
-			String uri = lru.getUri();
-			mDiskManager.deleteFile(encode(uri));
-			mDatabaseHelper.removeFile(uri);
-			mCachedImagesMap.removeDimensions(uri);
-		}
+	private void clearLeastUsedFilesInCache() {
+		mDatabaseHelper.removeLeastUsedFileFromCache(mMaximumCacheSizeInBytes);
 	}
 
 	private File getFile(String uri) {
@@ -292,6 +293,11 @@ public class DiskLRUCacher implements ImageDiskCacherInterface {
 		@Override
 		public void onDatabaseWiped() {
 			mDiskManager.clearDirectory();
+		}
+
+		@Override
+		public void onImageEvicted(String uri) {
+			mDiskManager.deleteFile(encode(uri));
 		}
 	};
 

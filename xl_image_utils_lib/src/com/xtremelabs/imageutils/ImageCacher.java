@@ -1,3 +1,19 @@
+/*
+ * Copyright 2013 Xtreme Labs
+ * 
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *     
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.xtremelabs.imageutils;
 
 import java.io.FileNotFoundException;
@@ -6,6 +22,7 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.os.Build;
 
+import com.xtremelabs.imageutils.AsyncOperationsMaps.AsyncOperationState;
 import com.xtremelabs.imageutils.DiskLRUCacher.FileFormatException;
 import com.xtremelabs.imageutils.ImageResponse.ImageResponseStatus;
 
@@ -72,7 +89,8 @@ public ImageResponse getBitmap(ImageRequest imageRequest, ImageCacherListener im
 		String uri = imageRequest.getUri();
 		throwExceptionIfNeeded(imageRequest, imageCacherListener);
 
-		switch (mAsyncOperationsMap.queueListenerIfRequestPending(imageRequest, imageCacherListener)) {
+		AsyncOperationState state = mAsyncOperationsMap.queueListenerIfRequestPending(imageRequest, imageCacherListener);
+		switch (state) {
 		case QUEUED_FOR_NETWORK_REQUEST:
 			mNetworkInterface.bump(uri);
 			return generateQueuedResponse();
@@ -92,7 +110,9 @@ public ImageResponse getBitmap(ImageRequest imageRequest, ImageCacherListener im
 
 		// TODO: Look into removing the sampleSize check.
 
-		if (mDiskCache.isCached(uri) && sampleSize != -1) {
+		boolean isCached = mDiskCache.isCached(uri);
+
+		if (isCached && sampleSize != -1) {
 			DecodeSignature decodeSignature = new DecodeSignature(uri, sampleSize, imageRequest.getOptions().preferedConfig);
 			Bitmap bitmap;
 			if ((bitmap = mMemoryCache.getBitmap(decodeSignature)) != null) {
@@ -125,7 +145,7 @@ public ImageResponse getBitmap(ImageRequest imageRequest, ImageCacherListener im
 	 * 
 	 * @param uri
 	 */
-	public synchronized void precacheImageToDisk(ImageRequest imageRequest) {
+	public void precacheImageToDisk(ImageRequest imageRequest) {
 		String uri = imageRequest.getUri();
 		validateUri(uri);
 
