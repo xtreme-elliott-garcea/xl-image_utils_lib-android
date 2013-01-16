@@ -17,10 +17,12 @@
 package com.xtremelabs.imageutils;
 
 import java.io.FileNotFoundException;
+import java.net.URISyntaxException;
 
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.os.Build;
+import android.util.Log;
 
 import com.xtremelabs.imageutils.AsyncOperationsMaps.AsyncOperationState;
 import com.xtremelabs.imageutils.DiskLRUCacher.FileFormatException;
@@ -58,34 +60,8 @@ public class ImageCacher implements ImageDownloadObserver, ImageDiskObserver, As
 		}
 		return mImageCacher;
 	}
-	
-	public Bitmap getBitmapForWidget(String url, ImageCacherListener cacherListener, ScalingInfo scalingInfo) {
-		ImageRequest imageRequest = new ImageRequest(url, scalingInfo);
-	     int sampleSize = getSampleSize(imageRequest);
-	     Bitmap bitmap;
 
-	     if (mDiskCache.isCached(url) && sampleSize != -1) {
-	          if ((bitmap = mMemoryCache.getBitmap(new DecodeSignature(url, sampleSize, null))) != null) {
-	               return bitmap;
-	          } else {
-	               try {
-	                    return mDiskCache.getBitmapSynchronouslyFromDisk(new DecodeSignature(url, sampleSize, null));
-	               } catch (FileNotFoundException e) {
-	                    // TODO Auto-generated catch block
-	                    e.printStackTrace();
-	               } catch (FileFormatException e) {
-	                   // TODO Auto-generated catch block
-	                   e.printStackTrace();
-	              }
-	          }
-	     } else {
-	          downloadImageFromNetwork(imageRequest, cacherListener);
-	     }
-
-	     return null;
-	}
-
-public ImageResponse getBitmap(ImageRequest imageRequest, ImageCacherListener imageCacherListener) {
+	public ImageResponse getBitmap(ImageRequest imageRequest, ImageCacherListener imageCacherListener) {
 		String uri = imageRequest.getUri();
 		throwExceptionIfNeeded(imageRequest, imageCacherListener);
 
@@ -128,6 +104,65 @@ public ImageResponse getBitmap(ImageRequest imageRequest, ImageCacherListener im
 
 		return generateQueuedResponse();
 	}
+
+	public ImageResponse getBitmapSynchronouslyFromDiskOrMemory(ImageRequest imageRequest, ImageCacherListener imageCacherListener) {
+		String uri = imageRequest.getUri();
+
+		synchronized (mAsyncOperationsMap) {
+			AsyncOperationState state = mAsyncOperationsMap.queueListenerIfRequestPending(imageRequest, imageCacherListener);
+			switch (state) {
+			case QUEUED_FOR_NETWORK_REQUEST:
+				return generateQueuedResponse();
+			case QUEUED_FOR_DETAILS_REQUEST:
+			case QUEUED_FOR_DECODE_REQUEST:
+				mAsyncOperationsMap.cancelPendingRequest(imageCacherListener);
+				break;
+			case NOT_QUEUED:
+				break;
+			}
+		}
+
+		int sampleSize = getSampleSize(imageRequest);
+		boolean isCached = mDiskCache.isCached(uri);
+
+		try {
+			if (isCached && sampleSize != -1) {
+				DecodeSignature decodeSignature = new DecodeSignature(uri, sampleSize, imageRequest.getOptions().preferedConfig);
+				Bitmap bitmap;
+				if ((bitmap = mMemoryCache.getBitmap(decodeSignature)) != null) {
+					return new ImageResponse(bitmap, ImageReturnedFrom.MEMORY, ImageResponseStatus.SUCCESS);
+				} else {
+					return getBitmapSynchronouslyFromDisk(decodeSignature);
+				}
+			} else if (GeneralUtils.isFileSystemUri(uri)) {
+				mDiskCache.calculateAndSaveImageDetails(uri);
+				sampleSize = getSampleSize(imageRequest);
+				if (sampleSize != -1) {
+					DecodeSignature decodeSignature = new DecodeSignature(uri, sampleSize, imageRequest.getOptions().preferedConfig);
+					return getBitmapSynchronouslyFromDisk(decodeSignature);
+				}
+			}
+		} catch (FileNotFoundException e) {
+			Log.w(AbstractImageLoader.TAG, "Unable to load bitmap synchronously. File not found.");
+		} catch (FileFormatException e) {
+			Log.w(AbstractImageLoader.TAG, "Unable to load bitmap synchronously. File format exception.");
+		} catch (URISyntaxException e) {
+			Log.w(AbstractImageLoader.TAG, "Unable to load bitmap synchronously. URISyntaxException. URI: " + uri);
+		}
+
+		if (!GeneralUtils.isFileSystemUri(uri)) {
+			downloadImageFromNetwork(imageRequest, imageCacherListener);
+		}
+
+		return null;
+	}
+
+	private ImageResponse getBitmapSynchronouslyFromDisk(DecodeSignature decodeSignature) throws FileNotFoundException, FileFormatException {
+		Bitmap bitmap;
+		bitmap = mDiskCache.getBitmapSynchronouslyFromDisk(decodeSignature);
+		return new ImageResponse(bitmap, ImageReturnedFrom.DISK, ImageResponseStatus.SUCCESS);
+	}
+
 	@Override
 	public int getSampleSize(ImageRequest imageRequest) {
 		ScalingInfo scalingInfo = imageRequest.getScalingInfo();
