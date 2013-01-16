@@ -24,7 +24,6 @@ import android.app.Fragment;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Point;
-import android.os.Build;
 import android.os.Handler;
 import android.util.Log;
 import android.widget.ImageView;
@@ -79,7 +78,7 @@ public abstract class AbstractImageLoader {
 
 		mDestroyed = true;
 
-		List<ImageManagerListener> listeners = mReferenceManager.removeListenersForKey(mKey);
+		List<ImageManagerListener> listeners = mReferenceManager.cancelRequestsForKey(mKey);
 		if (listeners != null) {
 			for (ImageManagerListener listener : listeners) {
 				mViewMapper.removeImageView(listener);
@@ -133,13 +132,11 @@ public abstract class AbstractImageLoader {
 	 * FIXME Potential memory leak - This method is not synchronized. If onDestroy is called while this is running, it is possible that references will be retained to the Activity or Fragment. Review this for all
 	 * loadImage calls.
 	 */
+	/*
+	 * TODO This should just be calling the most advanced loadImage call possible.
+	 */
 	public void loadImage(ImageView imageView, String uri) {
-		if (!mDestroyed) {
-			ImageManagerListener imageManagerListener = getDefaultImageManagerListener(mDefaultOptions);
-			performImageRequestOnUiThread(imageView, uri, mDefaultOptions, imageManagerListener);
-		} else {
-			Log.w(TAG, "WARNING: loadImage was called after the ImageLoader was destroyed.");
-		}
+		loadImage(imageView, uri, null, null);
 	}
 
 	/**
@@ -160,16 +157,46 @@ public abstract class AbstractImageLoader {
 	 *            additional details.
 	 */
 	public void loadImage(ImageView imageView, String uri, Options options) {
-		if (!mDestroyed) {
-			if (options == null) {
-				options = mDefaultOptions;
-			}
+		loadImage(imageView, uri, options, null);
+	}
 
-			ImageManagerListener imageManagerListener = getDefaultImageManagerListener(options);
-			performImageRequestOnUiThread(imageView, uri, options, imageManagerListener);
-		} else {
-			Log.w(TAG, "WARNING: loadImage was called after the ImageLoader was destroyed.");
-		}
+	/**
+	 * Loads the image located at the provided URI. If the image is located on the web, it will be cached on disk and in memory. If the image is located on the file system, it will be cached in memory.<br>
+	 * <br>
+	 * The image WILL NOT BE AUTOMATICALLY LOADED to the {@link ImageView}. Instead, the {@link ImageLoaderListener} will have its onImageAvailable() method called on the UI thread with a reference to both the
+	 * {@link ImageView} and the bitmap. It is up to the developer to load the bitmap to the view.<br>
+	 * <br>
+	 * This method should be used if the app needs to:<br>
+	 * - perform additional logic when the bitmap is returned<br>
+	 * - manually handle image failures<br>
+	 * - animate the bitmap.<br>
+	 * <br>
+	 * 
+	 * @param imageView
+	 *            The view that will be displaying the image. The bitmap will not be loaded directly into this view. Rather, a reference to the bitmap and to the ImageView will be passed back to the
+	 *            {@link ImageLoaderListener}.<br>
+	 * <br>
+	 * @param uri
+	 *            Location of the image. The URI can refer to an image located either on the local file system or on the web (URL).<br>
+	 * <br>
+	 *            The URI scheme for local file system requests is "file".<br>
+	 *            File system URI example: "file:///this/is/the/image/path/image.jpg".<br>
+	 *            If using a file system URI, the image will be cached in the memory cache.<br>
+	 * <br>
+	 * @param listener
+	 *            This listener will be called once the image request is complete. If the bitmap was retrieved successfully, the
+	 *            {@link ImageLoaderListener#onImageAvailable(ImageView, android.graphics.Bitmap, ImageReturnedFrom)} method will be called.
+	 */
+	public void loadImage(ImageView imageView, String uri, final ImageLoaderListener listener) {
+		loadImage(imageView, uri, null, listener);
+	}
+
+	public void loadImage(String uri, BitmapListener listener) {
+		baseLoadImage(null, uri, null, listener.getImageLoaderListener());
+	}
+
+	public void loadImage(String uri, Options options, BitmapListener listener) {
+		baseLoadImage(null, uri, options, listener.getImageLoaderListener());
 	}
 
 	/**
@@ -204,16 +231,25 @@ public abstract class AbstractImageLoader {
 	 *            {@link ImageLoaderListener#onImageAvailable(ImageView, android.graphics.Bitmap, ImageReturnedFrom)} method will be called.
 	 */
 	public void loadImage(ImageView imageView, String uri, Options options, final ImageLoaderListener listener) {
-		if (!mDestroyed) {
-			if (listener == null) {
-				throw new IllegalArgumentException("You cannot pass in a null ImageLoadingListener.");
-			}
+		if (imageView == null) {
+			throw new IllegalArgumentException("The method \"loadImage(ImageView, String)\" requires a non-null ImageView to be passed in.");
+		}
+		baseLoadImage(imageView, uri, options, listener);
+	}
 
+	private void baseLoadImage(ImageView imageView, String uri, Options options, ImageLoaderListener listener) {
+		if (!mDestroyed) {
 			if (options == null) {
 				options = mDefaultOptions;
 			}
 
-			ImageManagerListener imageManagerListener = getImageManagerListenerWithCallback(listener, options);
+			ImageManagerListener imageManagerListener;
+			if (listener == null) {
+				imageManagerListener = getDefaultImageManagerListener(options);
+			} else {
+				imageManagerListener = getImageManagerListenerWithCallback(listener, options);
+			}
+
 			performImageRequestOnUiThread(imageView, uri, options, imageManagerListener);
 		} else {
 			Log.w(TAG, "WARNING: loadImage was called after the ImageLoader was destroyed.");
@@ -262,7 +298,19 @@ public abstract class AbstractImageLoader {
 	 * @returns True if an image load was stopped. False on failure.
 	 */
 	public boolean stopLoadingImage(ImageView imageView) {
-		return mViewMapper.removeListener(imageView) != null;
+		ImageManagerListener imageManagerListener = mViewMapper.removeListener(imageView);
+
+		if (imageManagerListener != null) {
+			mReferenceManager.cancelRequest(imageManagerListener);
+			return true;
+		}
+
+		return false;
+	}
+
+	public void stopLoadingImage(ImageManagerListener imageManagerListener) {
+		mViewMapper.removeImageView(imageManagerListener);
+		mReferenceManager.cancelRequest(imageManagerListener);
 	}
 
 	/**
@@ -273,8 +321,9 @@ public abstract class AbstractImageLoader {
 	 */
 	public static void invalidateFileSystemUri(Context applicationContext, String uri) {
 		if (!(applicationContext instanceof Application)) {
-			throw new IllegalArgumentException("You may only invalidate file system URIs with an application context!");
+			applicationContext = applicationContext.getApplicationContext();
 		}
+
 		ImageCacher.getInstance(applicationContext).invalidateFileSystemUri(uri);
 	}
 
@@ -299,9 +348,16 @@ public abstract class AbstractImageLoader {
 	 * @param maxSizeInBytes
 	 */
 	public void setMaximumMemCacheSize(long maxSizeInBytes) {
-		if (Build.VERSION.SDK_INT >= 12) {
-			ImageCacher.getInstance(mApplicationContext).setMaximumCacheSize(maxSizeInBytes);
-		}
+		ImageCacher.getInstance(mApplicationContext).setMaximumMemCacheSize(maxSizeInBytes);
+	}
+
+	/**
+	 * Sets the maximum disk cache size. This value defaults to 50MB. Most applications will probably need much less space.
+	 * 
+	 * @param maxSizeInBytes
+	 */
+	public void setMaximumDiskCacheSize(long maxSizeInBytes) {
+		ImageCacher.getInstance(mApplicationContext).setMaximumDiskCacheSize(maxSizeInBytes);
 	}
 
 	/**
@@ -345,16 +401,21 @@ public abstract class AbstractImageLoader {
 	 * @param applicationContext
 	 */
 	// TODO Test what happens if precache image to disk is called with a file system URI.
-	public static void precacheImageToDisk(final String uri, final Context applicationContext) {
+	public static void precacheImageToDisk(final String uri, Context applicationContext) {
+		if (!(applicationContext instanceof Application)) {
+			applicationContext = applicationContext.getApplicationContext();
+		}
+
 		if (ThreadChecker.isOnUiThread()) {
 			ImageRequest imageRequest = new ImageRequest(uri);
 			imageRequest.setRequestType(RequestType.CACHE_TO_DISK);
 			ImageCacher.getInstance(applicationContext).precacheImageToDisk(imageRequest);
 		} else {
+			final Context finalContext = applicationContext;
 			new Handler(applicationContext.getMainLooper()).post(new Runnable() {
 				@Override
 				public void run() {
-					precacheImageToDisk(uri, applicationContext);
+					precacheImageToDisk(uri, finalContext);
 				}
 			});
 		}
@@ -371,24 +432,26 @@ public abstract class AbstractImageLoader {
 	 * allowing for significant improvements to memory usage and performance, at no cost to image detail.
 	 * 
 	 * @param uri
-	 * @param applicationContext
-	 * @param width
-	 *            See comment above. Pass in NULL if you want the width to be ignored.
-	 * @param height
-	 *            See comment above. Pass in NULL if you want the width to be ignored.
+	 * 
+	 * @param bounds
+	 *            The expected dimensions of the view in pixels. The width and/or height can be set to null.
+	 * 
+	 * @param options
+	 *            The options used to customize how the view gets precached. Please note that all options relating the image bounds are ignored during this precaching call. The "bounds" object is used instead. Otherwise,
+	 *            the options should be identical to the image request that will be performed by the app.
 	 * 
 	 * @throws CalledFromWrongThreadException
 	 *             This is thrown if the method is called from off the UI thread.
 	 */
-	public void precacheImageToDiskAndMemory(String uri, Integer width, Integer height) {
+	public void precacheImageToDiskAndMemory(String uri, Dimensions bounds, Options options) {
 		// TODO: Replace the width and height with options?
 		ThreadChecker.throwErrorIfOffUiThread();
 
 		ScalingInfo scalingInfo = new ScalingInfo();
-		scalingInfo.height = height;
-		scalingInfo.width = width;
+		scalingInfo.height = bounds.height;
+		scalingInfo.width = bounds.width;
 
-		ImageRequest imageRequest = new ImageRequest(uri, scalingInfo);
+		ImageRequest imageRequest = new ImageRequest(uri, scalingInfo, options == null ? mDefaultOptions : options);
 		mReferenceManager.getBitmap(mApplicationContext, imageRequest, getBlankImageManagerListener());
 	}
 
@@ -408,7 +471,7 @@ public abstract class AbstractImageLoader {
 		mReferenceManager.getBitmap(applicationContext, imageRequest, getBlankImageManagerListener());
 	}
 
-	protected void initKeyAndAppContext(Object key, Context applicationContext) {
+	private void initKeyAndAppContext(Object key, Context applicationContext) {
 		mApplicationContext = applicationContext;
 		mKey = key;
 	}
@@ -443,7 +506,7 @@ public abstract class AbstractImageLoader {
 	}
 
 	private void setPreLoadImage(ImageView imageView, Options options) {
-		if (options.wipeOldImageOnPreload) {
+		if (imageView != null && options.wipeOldImageOnPreload) {
 			if (options.placeholderImageResourceId != null) {
 				imageView.setImageResource(options.placeholderImageResourceId);
 			} else {
@@ -480,7 +543,7 @@ public abstract class AbstractImageLoader {
 			height = Math.min(screenSize.height, height == null ? screenSize.height : height);
 		}
 
-		if (options.autoDetectBounds) {
+		if (options.autoDetectBounds && imageView != null) {
 			Point imageBounds = ViewDimensionsUtil.getImageViewDimensions(imageView);
 			if (imageBounds.x != -1) {
 				if (width == null) {
@@ -508,7 +571,7 @@ public abstract class AbstractImageLoader {
 		if (oldListener != null) {
 			mReferenceManager.cancelRequest(oldListener);
 		}
-		mViewMapper.registerImageViewToListener(view, listener);
+		mViewMapper.registerRequest(view, listener);
 	}
 
 	/**
@@ -558,9 +621,7 @@ public abstract class AbstractImageLoader {
 			@Override
 			public void onImageReceived(ImageResponse imageResponse) {
 				ImageView imageView = mViewMapper.removeImageView(this);
-				if (imageView != null) {
-					listener.onImageAvailable(imageView, imageResponse.getBitmap(), imageResponse.getImageReturnedFrom());
-				}
+				listener.onImageAvailable(imageView, imageResponse.getBitmap(), imageResponse.getImageReturnedFrom());
 			}
 		};
 	}
@@ -657,7 +718,7 @@ public abstract class AbstractImageLoader {
 		 * The ImageLoader has the ability to automatically scale down images according to the bounds of the ImageView provided, or the bounds specified within this options object. This parameter is a flag for the sample
 		 * size calculation logic that changes how it chooses sample sizes. See {@link ScalingPreference} for further details.
 		 */
-		public ScalingPreference scalingPreference = ScalingPreference.SMALLER_THAN_VIEW;
+		public ScalingPreference scalingPreference = ScalingPreference.MATCH_TO_LARGER_DIMENSION;
 
 		/**
 		 * If set to true, the ImageLoader will, before getting the Bitmap, replace the current image within the ImageView with either a null Bitmap or the image resource indicated by the placeholderImageResourceId.<br>
@@ -686,6 +747,9 @@ public abstract class AbstractImageLoader {
 		 * This options can be used to manually raise or lower the bit depth of images, which may result in memory savings.<br>
 		 * <br>
 		 * Default value: null.
+		 */
+		/*
+		 * FIXME The SizeEstimatingMemCache does not take into account pixel format for size estimations.
 		 */
 		public Bitmap.Config preferedConfig = null;
 	}

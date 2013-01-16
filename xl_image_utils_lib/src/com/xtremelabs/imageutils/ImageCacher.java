@@ -175,8 +175,12 @@ public ImageResponse getBitmap(ImageRequest imageRequest, ImageCacherListener im
 		mMemoryCache.clearCache();
 	}
 
-	public void setMaximumCacheSize(long size) {
+	public void setMaximumMemCacheSize(long size) {
 		mMemoryCache.setMaximumCacheSize(size);
+	}
+
+	public void setMaximumDiskCacheSize(long maxSizeInBytes) {
+		mDiskCache.setDiskCacheSize(maxSizeInBytes);
 	}
 
 	public void cancelRequestForBitmap(ImageCacherListener imageCacherListener) {
